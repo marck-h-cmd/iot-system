@@ -50,6 +50,14 @@ web-build/
 *.p12
 *.key
 *.mobileprovision
+*.apk
+*.aab
+
+# Android native build outputs
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
 
 # Database & persistence data
 mysql_data/
