@@ -4,19 +4,12 @@
     "slug": "smart-cooling-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "splash": {
-      "resizeMode": "contain",
-      "backgroundColor": "#090d16"
-    },
     "ios": {
       "supportsTablet": true
     },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#090d16"
-      }
+      "package": "com.unt.smartcooling"
     },
     "web": {
       "bundler": "metro"

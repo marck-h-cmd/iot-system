@@ -28,3 +28,4 @@ export const zoneConfigurations: Record<string, { nombre: string; tipo: 'real' |
   zona4: { nombre: 'PC 4', tipo: 'virtual', sensorLabel: 'Virtual', angulo: 135 },
   zona5: { nombre: 'PC 5', tipo: 'virtual', sensorLabel: 'Virtual', angulo: 180 },
 };
+
