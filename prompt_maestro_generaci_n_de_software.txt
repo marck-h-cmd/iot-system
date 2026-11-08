@@ -1,0 +1,71 @@
+# PROMPT MAESTRO: SISTEMA DE ENFRIAMIENTO AUTÓNOMO INTELIGENTE IOT
+
+**Rol Asignado:** Actúa como un Arquitecto de Software IoT Senior, Ingeniero de Firmware y Científico de Datos. Tu objetivo es generar el código completo (C++, Python, SQL, TypeScript) para un "Sistema de Enfriamiento Autónomo Inteligente para Equipos Electrónicos" basado en una arquitectura de microservicios y Edge Computing.
+
+---
+
+## 1. CONTEXTO Y ALCANCE DEL PROYECTO
+El sistema monitorea la temperatura del aire expulsado por computadoras en un laboratorio de la Universidad Nacional de Trujillo para dirigir un recurso de ventilación compartido hacia la zona con mayor estrés térmico, optimizando el consumo energético y evitando la instalación de ventiladores individuales. El proyecto mezcla zonas físicas reales y zonas virtuales simuladas.
+
+## 2. ARQUITECTURA DE HARDWARE Y ELECTRÓNICA
+*   **Placa de Control (Edge):** Arduino Nano CH340G (Lógica 5V). Se encarga exclusivamente de leer los sensores físicos, controlar el driver de potencia y mover el servomotor.
+*   **Nodo de Comunicación (Gateway):** ESP32-DevKitC V4 (Lógica 3.3V). Actúa como puente bidireccional Wi-Fi/MQTT. Se comunica con el Arduino Nano a través de Serial (UART) usando un divisor resistivo de 5V a 3.3V en el pin RX del ESP32.
+*   **Sensores Físicos:** 
+    *   1 DHT11 (en PC 1 - conectado a pin digital del Nano).
+    *   1 DS18B20 (en PC 2 - protocolo 1-Wire al Nano con pull-up de 10kΩ).
+*   **Actuadores:** 
+    *   1 Servomotor SG90 (Controlado por PWM desde el Nano para orientar el flujo a 0°, 90° o 180°).
+    *   1 Miniventilador axial de 5V (Activado/Desactivado mediante un módulo driver MOSFET AOD4184A desde un pin digital del Nano).
+
+## 3. ARQUITECTURA DE SOFTWARE (DOCKER)
+La solución backend/frontend se despliega en una red Docker (`iot_network`) con los siguientes servicios:
+1.  **Broker MQTT:** EMQX v4.4.19 (Puertos 1883, 18083). Usa el plugin `emqx_auth_mysql` para autenticación y ACL.
+2.  **Base de Datos:** MySQL 8.0 (Puerto expuesto 3308 para evitar conflictos locales).
+3.  **Backend & IA (FastAPI):** Entorno Python 3.10. Ejecuta un cliente MQTT (`paho-mqtt`), procesa las reglas de negocio, guarda en MySQL (`mysql-connector-python`), ejecuta Regresión Lineal (`scikit-learn`, `pandas`) para predicción a +10 minutos y expone una API REST.
+4.  **Frontend (Next.js):** Aplicación web reactiva usando TailwindCSS y `recharts` para dashboards en tiempo real consumiendo la API de FastAPI.
+5.  **Simulador Python:** Script que inyecta datos virtuales (origen = virtual) para las PC 3, PC 4 y PC 5 directamente al broker MQTT.
+
+## 4. OPERACIONALIZACIÓN DE VARIABLES E INDICADORES (CRÍTICO)
+El código debe estar estrictamente diseñado para capturar y calcular los siguientes indicadores del proyecto de investigación. Los payloads JSON y el esquema de base de datos deben facilitar esto:
+
+*   **Dimensión 1: Transmisión y Arquitectura**
+    *   *1.1 Intervalo de adquisición:* Los payloads deben incluir un `timestamp_origen` (generado en el ESP32 o backend) y un `message_id` para medir la frecuencia real (meta: cada 5 segundos).
+    *   *1.2 Tasa de entregas MQTT exitosas:* Se comparará el número de mensajes enviados por el ESP32 vs los guardados en MySQL.
+*   **Dimensión 2: Precisión Predictiva (Modelo ML)**
+    *   *2.1 MAE (Error Absoluto Medio), 2.2 RMSE (Error Cuadrático Medio), 2.3 R²:* El backend Python debe incluir una función o endpoint que compare la columna `temperatura_predicha` con la `temperatura_actual` real recolectada exactamente 10 minutos después para ese mismo nodo.
+*   **Dimensión 3: Respuesta de Control**
+    *   *3.1 Exactitud de selección de zona:* La base de datos debe registrar qué zona eligió el algoritmo cuando la predicción superó los 35°C.
+    *   *3.2 Tiempo de latencia:* Se debe medir el delta entre el timestamp de la decisión en Python y un mensaje de "ACK" (Acknowledge) que el Arduino Nano debe enviar de vuelta vía UART->ESP32->MQTT tras mover el servo.
+*   **Dimensión 4: Efectividad Térmica y Eficiencia**
+    *   *4.1 Diferencia de Temperatura:* Cálculo del delta térmico (T_inicial - T_final) rastreable en la DB.
+    *   *4.2 Fracción de tiempo con ventilador encendido:* Log de minutos donde `estado_ventilador == 1`.
+
+## 5. PATRONES Y ESTRUCTURAS OBLIGATORIAS
+*   **Estructura Tópicos MQTT:** 
+    *   Publicación sensores: `lab/piloto/zona1/temp`, `lab/piloto/zona2/temp`, etc.
+    *   Suscripción de órdenes: `lab/piloto/accion`.
+    *   Confirmación de hardware: `lab/piloto/ack`.
+*   **Formato JSON Base de Sensores:** 
+    `{"msg_id": 123, "zona": "zona1", "temperatura": 34.5, "origen": "real"}`
+*   **Formato JSON Base de Acción (Python -> ESP32 -> Nano):** 
+    `{"zona_objetivo": "zona1", "fan_state": 1, "servo_angle": 0}`
+*   **Esquema de Base de Datos MySQL Base:** 
+    Tabla `registro_termico`: `id`, `zona`, `temperatura_actual`, `temperatura_predicha`, `estado_ventilador`, `angulo_servo`, `timestamp` (con INDEX en zona y timestamp).
+
+---
+
+## 6. INSTRUCCIONES DE GENERACIÓN PASO A PASO (ENTREGABLES)
+Por favor, genera el código completo, modular y comentado, dividiendo tu respuesta en las siguientes Fases. 
+*(Si te quedas sin espacio en una sola respuesta, detente al finalizar una Fase y espera mi instrucción para continuar con la siguiente).*
+
+*   **FASE 1: Firmware C++ para Arduino Nano y ESP32.**
+    *   **1A (Nano):** Código que use `DHT.h` y `DallasTemperature.h`. Debe empaquetar los datos en JSON usando `ArduinoJson` y enviarlos por `Serial`. A su vez, debe escuchar el `Serial`, decodificar las órdenes (fan_state, servo_angle), mover el servo, activar el pin del MOSFET y enviar un mensaje JSON de ACK.
+    *   **1B (ESP32):** Código que se conecte a Wi-Fi y EMQX (`PubSubClient`). Debe escuchar el UART (Serial2), leer el JSON del Nano y publicarlo en MQTT. También debe suscribirse a `lab/piloto/accion` y enviar el payload crudo por UART hacia el Nano.
+*   **FASE 2: Base de Datos y MQTT (Docker).**
+    *   Proporciona el archivo `init.sql` completo (incluyendo las tablas de telemetría y las tablas `mqtt_user` y `mqtt_acl` para EMQX) y el `emqx_auth_mysql.conf`.
+*   **FASE 3: Backend Python y Machine Learning (FastAPI).**
+    *   Proporciona el script `main.py`. Debe incluir la conexión a MySQL, el thread del cliente MQTT, el entrenamiento dinámico de `LinearRegression` de scikit-learn, la lógica de decisión (umbral 35°C), y un endpoint `/api/metricas` que calcule matemáticamente el MAE, RMSE y R² buscando los datos desfasados por 10 minutos en la DB.
+*   **FASE 4: Simulador Python (Zonas Virtuales).**
+    *   Un script independiente `simulador.py` que publique datos aleatorios con ligero ruido ascendente para las zonas 3, 4 y 5 cada 5 segundos.
+*   **FASE 5: Frontend (Next.js).**
+    *   El componente principal de React (`page.tsx`) usando `recharts` para graficar la temperatura actual vs la predicha en el tiempo, y mostrar KPIs del estado del ventilador y latencia.

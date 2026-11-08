@@ -1,0 +1,112 @@
+services:
+  # 1. Broker MQTT para recepción de datos físicos (Nano/ESP32) y virtuales
+  emqx:
+    image: emqx/emqx:latest
+    restart: always
+    ports:
+      - "1883:1883"      # MQTT TCP
+      - "8083:8083"      # MQTT WebSockets
+      - "18083:18083"    # Dashboard Web EMQX
+    environment:
+      - EMQX_DASHBOARD__DEFAULT_USERNAME=admin
+      - EMQX_DASHBOARD__DEFAULT_PASSWORD=public
+    volumes:
+      - emqx_data:/opt/emqx/data
+    networks:
+      - iot_network
+
+  # 2. Base de Datos Relacional MySQL 8.0
+  mysql:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: emqx_db
+      MYSQL_USER: emqx_user
+      MYSQL_PASSWORD: emqx_pass
+    ports:
+      - "3308:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - iot_network
+
+  # 3. Backend REST & Motor de Inteligencia Artificial (FastAPI + Scikit-Learn)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=emqx_user
+      - DB_PASS=emqx_pass
+      - DB_NAME=emqx_db
+      - MQTT_BROKER=emqx
+      - MQTT_PORT=1883
+      - MQTT_USER=sensor_iot
+      - MQTT_PASS=marck124M
+    depends_on:
+      - emqx
+      - mysql
+    networks:
+      - iot_network
+
+  # 4. Inyector y Simulador de Zonas Virtuales (PC 3, PC 4, PC 5)
+  simulador:
+    build:
+      context: ./simulador
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      - MQTT_BROKER=emqx
+      - MQTT_PORT=1883
+      - MQTT_USER=sensor_iot
+      - MQTT_PASS=marck124M
+    depends_on:
+      - emqx
+      - backend
+    networks:
+      - iot_network
+
+  # 5. Gestor Visual de Base de Datos (phpMyAdmin)
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    restart: always
+    environment:
+      PMA_HOST: mysql
+      PMA_USER: emqx_user
+      PMA_PASSWORD: emqx_pass
+    ports:
+      - "8085:80"
+    depends_on:
+      - mysql
+    networks:
+      - iot_network
+
+  # 6. Frontend Web Dashboard (Next.js + Recharts + TailwindCSS)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - BACKEND_INTERNAL_URL=http://backend:8000/api/:path*
+    depends_on:
+      - backend
+    networks:
+      - iot_network
+
+networks:
+  iot_network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  emqx_data:
