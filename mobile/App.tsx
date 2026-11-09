@@ -1,222 +1,411 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from "react";
 import {
   SafeAreaView,
   ScrollView,
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
   StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
   RefreshControl,
-} from 'react-native';
-import { Wind, Settings, Wifi, RefreshCw } from 'lucide-react-native';
-import { colors, zoneConfigurations } from './src/styles/theme';
-import { mqttService } from './src/services/mqttClient';
-import { TelemetryPayload, ConnectionStatus, BrokerConfig } from './src/types/iot';
-import { ZoneCard } from './src/components/ZoneCard';
-import { HeroMetrics } from './src/components/HeroMetrics';
-import { ControlPanel } from './src/components/ControlPanel';
-import { ConnectionModal } from './src/components/ConnectionModal';
+} from "react-native";
+import {
+  Clock,
+  Moon,
+  RefreshCw,
+  Settings,
+  Sun,
+  Wifi,
+  WifiOff,
+} from "lucide-react-native";
+import {
+  AlertaActiva,
+  AppSettings,
+  EscenarioSimulacion,
+  EstadoActualResponse,
+  EventoControl,
+  IndicadoresDetalladosResponse,
+  IndicadoresResponse,
+  ModoControl,
+  PruebasEstadisticasResponse,
+} from "./src/types/iot";
+import { DARK_THEME, LIGHT_THEME } from "./src/styles/theme";
+import {
+  cambiarEscenarioMobile,
+  cambiarModoControlMobile,
+  detectDefaultApiUrl,
+  enviarComandoManualMobile,
+  fetchMobileDashboardBundle,
+  reiniciarSimulacionMobile,
+} from "./src/services/api";
+import { BrandLogoNative } from "./src/components/BrandLogoNative";
+import {
+  BottomTabBar,
+  PrimaryMobileTab,
+} from "./src/components/BottomTabBar";
+import { HomeMonitoringScreen } from "./src/screens/HomeMonitoringScreen";
+import { IndicatorsScreen } from "./src/screens/IndicatorsScreen";
+import { StatisticsScreen } from "./src/screens/StatisticsScreen";
+import { ControlScreen } from "./src/screens/ControlScreen";
+import { ZoneDetailScreen } from "./src/screens/ZoneDetailScreen";
+import { EventsHistoryScreen } from "./src/screens/EventsHistoryScreen";
+import { SettingsScreen } from "./src/screens/SettingsScreen";
+
+type OverlayRoute =
+  | { type: "none" }
+  | { type: "zone_detail"; zonaId: string }
+  | { type: "events_history" }
+  | { type: "settings" };
+
+const TAB_TITLES: Record<PrimaryMobileTab, string> = {
+  monitoreo: "Monitoreo",
+  indicadores: "Indicadores",
+  estadisticas: "Estadísticas",
+  control: "Control",
+};
 
 export default function App() {
-  const [telemetry, setTelemetry] = useState<Record<string, TelemetryPayload>>({});
-  const [fanActive, setFanActive] = useState<boolean>(false);
-  const [currentAngle, setCurrentAngle] = useState<number>(90);
-  const [targetZone, setTargetZone] = useState<string>('zona3');
-  const [latencyMs, setLatencyMs] = useState<number>(42);
-  const [packetsCount, setPacketsCount] = useState<number>(0);
-  const [status, setStatus] = useState<ConnectionStatus>('disconnected');
-  const [statusError, setStatusError] = useState<string | undefined>(undefined);
-  const [modalVisible, setModalVisible] = useState<boolean>(false);
+  const [settings, setSettings] = useState<AppSettings>(() => ({
+    apiUrl: detectDefaultApiUrl(),
+    pollingIntervalMs: 3000,
+    darkMode: false,
+  }));
+
+  const [activeTab, setActiveTab] = useState<PrimaryMobileTab>("monitoreo");
+  const [overlayRoute, setOverlayRoute] = useState<OverlayRoute>({
+    type: "none",
+  });
+  const [zonaChart, setZonaChart] = useState<string>("zona1");
+
+  const [estadoActual, setEstadoActual] =
+    useState<EstadoActualResponse | null>(null);
+  const [historial, setHistorial] = useState<any[]>([]);
+  const [indicadores, setIndicadores] =
+    useState<IndicadoresResponse | null>(null);
+  const [indicadoresDetallados, setIndicadoresDetallados] =
+    useState<IndicadoresDetalladosResponse | null>(null);
+  const [pruebasEstadisticas, setPruebasEstadisticas] =
+    useState<PruebasEstadisticasResponse | null>(null);
+  const [eventos, setEventos] = useState<EventoControl[]>([]);
+  const [alertas, setAlertas] = useState<AlertaActiva[]>([]);
+
+  const [connected, setConnected] = useState<boolean>(false);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string>("--:--:--");
+
+  const theme = settings.darkMode ? DARK_THEME : LIGHT_THEME;
+
+  const sincronizarDatos = useCallback(async () => {
+    try {
+      const bundle = await fetchMobileDashboardBundle(settings.apiUrl);
+      setEstadoActual(bundle.estadoActual);
+      setHistorial(bundle.historial);
+      if (bundle.indicadores) setIndicadores(bundle.indicadores);
+      if (bundle.indicadoresDetallados)
+        setIndicadoresDetallados(bundle.indicadoresDetallados);
+      if (bundle.pruebasEstadisticas)
+        setPruebasEstadisticas(bundle.pruebasEstadisticas);
+      setEventos(bundle.eventos);
+      setAlertas(bundle.alertas);
+      setConnected(true);
+      setLastSyncTime(
+        new Date().toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        })
+      );
+    } catch {
+      setConnected(false);
+    }
+  }, [settings.apiUrl]);
 
   useEffect(() => {
-    const unsubTelemetry = mqttService.onTelemetry((data) => {
-      setTelemetry((prev) => ({
-        ...prev,
-        [data.zona]: data,
-      }));
-      setPacketsCount((prev) => prev + 1);
+    sincronizarDatos();
+    const timer = setInterval(sincronizarDatos, settings.pollingIntervalMs);
+    return () => clearInterval(timer);
+  }, [sincronizarDatos, settings.pollingIntervalMs]);
 
-      if (data.estado_ventilador !== undefined) {
-        setFanActive(data.estado_ventilador === 1);
-      }
-      if (data.angulo_servo !== undefined) {
-        setCurrentAngle(data.angulo_servo);
-      }
-    });
-
-    const unsubAction = mqttService.onAction((action) => {
-      setFanActive(action.fan_state === 1);
-      setCurrentAngle(action.servo_angle);
-      setTargetZone(action.zona_objetivo);
-    });
-
-    const unsubAck = mqttService.onAck((ack) => {
-      if (ack.latencia_ejecucion_ms) {
-        setLatencyMs(ack.latencia_ejecucion_ms);
-      }
-    });
-
-    const unsubStatus = mqttService.onStatusChange((newStatus, error) => {
-      setStatus(newStatus);
-      setStatusError(error);
-    });
-
-    mqttService.connect();
-
-    return () => {
-      unsubTelemetry();
-      unsubAction();
-      unsubAck();
-      unsubStatus();
-      mqttService.disconnect();
-    };
-  }, []);
-
-  const handleRefresh = () => {
+  const onPullRefresh = async () => {
     setRefreshing(true);
-    mqttService.connect();
-    setTimeout(() => {
-      setRefreshing(false);
-    }, 1500);
+    await sincronizarDatos();
+    setRefreshing(false);
   };
 
-  const handleSaveConfig = (newConfig: BrokerConfig) => {
-    mqttService.connect(newConfig);
+  const handleUpdateSettings = (partial: Partial<AppSettings>) => {
+    setSettings((prev) => ({ ...prev, ...partial }));
   };
 
-  const handleDisconnect = () => {
-    mqttService.disconnect();
+  const handleQuickCool = async (
+    zonaId: string,
+    angulo: number,
+    activar = true
+  ) => {
+    try {
+      await enviarComandoManualMobile(settings.apiUrl, {
+        zona: zonaId,
+        ventilador_activo: activar,
+        angulo_servo: angulo,
+      });
+      await sincronizarDatos();
+    } catch {}
   };
 
-  const getStatusColor = () => {
-    switch (status) {
-      case 'connected':
-        return colors.emerald;
-      case 'connecting':
-        return colors.amber;
-      case 'error':
-        return colors.rose;
-      default:
-        return colors.textMuted;
+  const handleCambiarModo = async (modo: ModoControl) => {
+    await cambiarModoControlMobile(settings.apiUrl, modo);
+    await sincronizarDatos();
+  };
+
+  const handleCambiarEscenario = async (escenario: EscenarioSimulacion) => {
+    await cambiarEscenarioMobile(settings.apiUrl, escenario);
+    await sincronizarDatos();
+  };
+
+  const handleReiniciarSimulacion = async () => {
+    await reiniciarSimulacionMobile(settings.apiUrl);
+    await sincronizarDatos();
+  };
+
+  const renderMainBody = () => {
+    if (overlayRoute.type === "zone_detail") {
+      const zId = overlayRoute.zonaId;
+      return (
+        <ZoneDetailScreen
+          apiUrl={settings.apiUrl}
+          zonaId={zId}
+          zonaEstado={estadoActual?.zonas?.[zId] || null}
+          ventiladorActivo={estadoActual?.ventilador_activo ?? false}
+          zonaObjetivoActual={estadoActual?.zona_objetivo_actual || "zona1"}
+          theme={theme}
+          onBack={() => setOverlayRoute({ type: "none" })}
+          onEnfriarEstacion={(id, ang, act) => handleQuickCool(id, ang, act)}
+        />
+      );
     }
-  };
 
-  const currentBrokerConfig = mqttService.getConfig();
-  const targetZoneLabel = zoneConfigurations[targetZone]?.nombre || targetZone;
+    if (overlayRoute.type === "events_history") {
+      return (
+        <EventsHistoryScreen
+          eventos={eventos}
+          theme={theme}
+          onBack={() => setOverlayRoute({ type: "none" })}
+        />
+      );
+    }
+
+    if (overlayRoute.type === "settings") {
+      return (
+        <SettingsScreen
+          settings={settings}
+          estadoActual={estadoActual}
+          connected={connected}
+          theme={theme}
+          onUpdateSettings={handleUpdateSettings}
+          onBack={() => setOverlayRoute({ type: "none" })}
+        />
+      );
+    }
+
+    if (activeTab === "monitoreo") {
+      return (
+        <HomeMonitoringScreen
+          estadoActual={estadoActual}
+          indicadores={indicadores}
+          alertas={alertas}
+          historial={historial}
+          zonaChart={zonaChart}
+          onSelectZonaChart={setZonaChart}
+          onOpenZoneDetail={(zId) =>
+            setOverlayRoute({ type: "zone_detail", zonaId: zId })
+          }
+          onQuickCoolZona={(zId, ang) => handleQuickCool(zId, ang, true)}
+          theme={theme}
+        />
+      );
+    }
+
+    if (activeTab === "indicadores") {
+      return (
+        <IndicatorsScreen
+          indicadores={indicadores}
+          indicadoresDetallados={indicadoresDetallados}
+          theme={theme}
+        />
+      );
+    }
+
+    if (activeTab === "estadisticas") {
+      return (
+        <StatisticsScreen
+          pruebasEstadisticas={pruebasEstadisticas}
+          theme={theme}
+        />
+      );
+    }
+
+    return (
+      <ControlScreen
+        estadoActual={estadoActual}
+        eventos={eventos}
+        theme={theme}
+        onCambiarModo={handleCambiarModo}
+        onEnviarComandoManual={(z, ang, fan) => handleQuickCool(z, ang, fan)}
+        onCambiarEscenario={handleCambiarEscenario}
+        onReiniciarSimulacion={handleReiniciarSimulacion}
+        onOpenFullHistory={() => setOverlayRoute({ type: "events_history" })}
+      />
+    );
+  };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor={colors.background} />
+    <SafeAreaView
+      style={[styles.safeArea, { backgroundColor: theme.bgMain }]}
+    >
+      <StatusBar
+        barStyle={settings.darkMode ? "light-content" : "dark-content"}
+        backgroundColor={theme.bgCard}
+      />
 
-      <View style={styles.header}>
-        <View style={styles.brandingRow}>
-          <View style={styles.iconContainer}>
-            <Wind size={20} color={colors.cyan} />
-          </View>
+      {/* Header Superior Compacto */}
+      <View
+        style={[
+          styles.topBar,
+          {
+            backgroundColor: theme.bgCard,
+            borderBottomColor: theme.borderCard,
+          },
+        ]}
+      >
+        <View style={styles.brandAndSection}>
+          <BrandLogoNative theme={theme} compact />
           <View>
-            <Text style={styles.appTitle}>
-              SMART <Text style={{ color: colors.cyan }}>COOLING</Text>
+            <Text style={[styles.sectionTitle, { color: theme.textPrimary }]}>
+              {overlayRoute.type === "none"
+                ? TAB_TITLES[activeTab]
+                : overlayRoute.type === "zone_detail"
+                ? "Detalle de estación"
+                : overlayRoute.type === "events_history"
+                ? "Historial"
+                : "Configuración"}
             </Text>
-            <Text style={styles.appSubtitle}>Laboratorio UNT • Cliente Móvil MQTT</Text>
+            <Text
+              style={[styles.sectionSub, { color: theme.textSecondary }]}
+            >
+              Simulación ({estadoActual?.escenario_simulacion || "normal"}) •{" "}
+              {estadoActual?.modo_control === "manual"
+                ? "Manual"
+                : "Automático"}
+            </Text>
           </View>
         </View>
 
-        <View style={styles.headerActions}>
+        <View style={styles.topActions}>
+          {/* Estado de conexión */}
           <TouchableOpacity
-            style={[styles.statusPill, { borderColor: getStatusColor() }]}
-            onPress={() => setModalVisible(true)}
-            activeOpacity={0.7}
+            style={[
+              styles.connPill,
+              {
+                backgroundColor: connected
+                  ? theme.emeraldSoft
+                  : theme.roseSoft,
+              },
+            ]}
+            onPress={() => setOverlayRoute({ type: "settings" })}
           >
-            <View style={[styles.statusDot, { backgroundColor: getStatusColor() }]} />
-            <Text style={[styles.statusLabel, { color: getStatusColor() }]}>
-              {status === 'connected'
-                ? 'MQTT OK'
-                : status === 'connecting'
-                ? 'CONECTANDO'
-                : status === 'error'
-                ? 'ERROR'
-                : 'OFFLINE'}
+            {connected ? (
+              <Wifi size={12} color={theme.emerald} />
+            ) : (
+              <WifiOff size={12} color={theme.rose} />
+            )}
+            <Text
+              style={[
+                styles.connText,
+                { color: connected ? theme.emerald : theme.rose },
+              ]}
+            >
+              {connected ? "Online" : "Offline"}
             </Text>
           </TouchableOpacity>
 
+          {/* Selector rápido Claro / Oscuro */}
           <TouchableOpacity
-            style={styles.settingsButton}
-            onPress={() => setModalVisible(true)}
-            activeOpacity={0.7}
+            style={[
+              styles.iconActionBtn,
+              {
+                backgroundColor: theme.bgSubCard,
+                borderColor: theme.borderCard,
+              },
+            ]}
+            onPress={() => handleUpdateSettings({ darkMode: !settings.darkMode })}
           >
-            <Settings size={18} color={colors.textSecondary} />
+            {settings.darkMode ? (
+              <Sun size={15} color={theme.amber} />
+            ) : (
+              <Moon size={15} color={theme.textSecondary} />
+            )}
+          </TouchableOpacity>
+
+          {/* Historial */}
+          <TouchableOpacity
+            style={[
+              styles.iconActionBtn,
+              {
+                backgroundColor: theme.bgSubCard,
+                borderColor: theme.borderCard,
+              },
+            ]}
+            onPress={() => setOverlayRoute({ type: "events_history" })}
+          >
+            <Clock size={15} color={theme.textSecondary} />
+          </TouchableOpacity>
+
+          {/* Ajustes */}
+          <TouchableOpacity
+            style={[
+              styles.iconActionBtn,
+              {
+                backgroundColor: theme.bgSubCard,
+                borderColor: theme.borderCard,
+              },
+            ]}
+            onPress={() => setOverlayRoute({ type: "settings" })}
+          >
+            <Settings size={15} color={theme.accentPrimary} />
           </TouchableOpacity>
         </View>
       </View>
 
+      {/* Contenido Principal Scrollable */}
       <ScrollView
-        style={styles.scrollView}
+        style={styles.scrollArea}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={handleRefresh}
-            tintColor={colors.cyan}
-            colors={[colors.cyan]}
+            onRefresh={onPullRefresh}
+            tintColor={theme.accentPrimary}
           />
         }
       >
-        <HeroMetrics
-          fanActive={fanActive}
-          currentAngle={currentAngle}
-          targetZoneName={targetZoneLabel}
-          latencyMs={latencyMs}
-          packetsCount={packetsCount}
-        />
+        {renderMainBody()}
 
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Matriz Térmica en Tiempo Real</Text>
-          <Text style={styles.sectionBadge}>5 PUESTOS</Text>
-        </View>
-
-        {Object.entries(zoneConfigurations).map(([key, info]) => {
-          const item = telemetry[key];
-          const isTarget = targetZone === key && fanActive;
-
-          return (
-            <ZoneCard
-              key={key}
-              zoneId={key}
-              nombre={info.nombre}
-              tipo={info.tipo}
-              sensorLabel={info.sensorLabel}
-              angulo={info.angulo}
-              temperatura={item ? item.temperatura : null}
-              temperaturaPredicha={item ? item.temperatura_predicha : null}
-              isActiveTarget={isTarget}
-            />
-          );
-        })}
-
-        <ControlPanel
-          currentFanState={fanActive ? 1 : 0}
-          currentAngle={currentAngle}
-          currentZone={targetZone}
-        />
-
-        <View style={styles.footerInfo}>
-          <Text style={styles.footerText}>
-            Broker: {currentBrokerConfig.host}:{currentBrokerConfig.port}
+        <View style={styles.syncFooter}>
+          <RefreshCw size={11} color={theme.textSecondary} />
+          <Text style={[styles.syncText, { color: theme.textSecondary }]}>
+            Actualizado: {lastSyncTime}
           </Text>
-          <Text style={styles.footerText}>Protocolo: MQTT v3.1.1 sobre WebSocket</Text>
         </View>
       </ScrollView>
 
-      <ConnectionModal
-        visible={modalVisible}
-        onClose={() => setModalVisible(false)}
-        config={currentBrokerConfig}
-        status={status}
-        statusError={statusError}
-        onSaveAndConnect={handleSaveConfig}
-        onDisconnect={handleDisconnect}
+      {/* Barra de Navegación Inferior (4 Pestañas Principales) */}
+      <BottomTabBar
+        activeTab={activeTab}
+        onSelectTab={(tab) => {
+          setOverlayRoute({ type: "none" });
+          setActiveTab(tab);
+        }}
+        theme={theme}
+        alertCount={alertas.length}
       />
     </SafeAreaView>
   );
@@ -225,117 +414,71 @@ export default function App() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: colors.background,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 14,
+  topBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: colors.surfaceBorder,
-    backgroundColor: '#0c121e',
   },
-  brandingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  brandAndSection: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 10,
   },
-  iconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: 'rgba(6, 182, 212, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  appTitle: {
+  sectionTitle: {
     fontSize: 16,
-    fontWeight: '900',
-    color: colors.textPrimary,
-    letterSpacing: 0.5,
+    fontWeight: "700",
+    letterSpacing: -0.2,
   },
-  appSubtitle: {
-    fontSize: 10,
-    color: colors.textMuted,
+  sectionSub: {
+    fontSize: 11,
+    fontWeight: "500",
+    marginTop: 1,
   },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  topActions: {
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
+  },
+  connPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 5,
-    borderRadius: 20,
-    borderWidth: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  statusLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  settingsButton: {
-    padding: 6,
     borderRadius: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
   },
-  scrollView: {
+  connText: {
+    fontSize: 10.5,
+    fontWeight: "700",
+  },
+  iconActionBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  scrollArea: {
     flex: 1,
   },
   scrollContent: {
-    padding: 16,
+    padding: 14,
+    paddingBottom: 24,
   },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 6,
-    marginBottom: 10,
+  syncFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    marginTop: 14,
   },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  sectionBadge: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: colors.cyan,
-    backgroundColor: 'rgba(6, 182, 212, 0.12)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
-  },
-  footerInfo: {
-    alignItems: 'center',
-    marginVertical: 12,
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  footerText: {
+  syncText: {
     fontSize: 11,
-    color: colors.textMuted,
-    fontFamily: 'monospace',
-    marginVertical: 1,
+    fontWeight: "500",
   },
 });
-

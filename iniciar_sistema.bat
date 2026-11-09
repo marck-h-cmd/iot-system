@@ -1,29 +1,23 @@
 @echo off
 chcp 65001 > nul
-cls
-echo =========================================================================
-echo  SISTEMA DE ENFRIAMIENTO AUTÓNOMO INTELIGENTE IOT - LABORATORIO UNT
-echo =========================================================================
+echo ============================================================================
+echo   SMART COOLING IoT 2.0 — UNIVERSIDAD NACIONAL DE TRUJILLO (UNT)
+echo   Modo Operativo: SIMULACIÓN UNIFICADA DE 5 ZONAS (Sin Circuito Físico)
+echo ============================================================================
 echo.
-echo [1/3] Iniciando Backend REST & Modelo de Machine Learning (FastAPI)...
-start "Backend FastAPI (Puerto 8000)" cmd /k "cd /d %~dp0backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
-
-timeout /t 3 /nobreak > nul
-
-echo [2/3] Iniciando Simulador de Zonas Virtuales (PC 3, PC 4, PC 5)...
-start "Simulador MQTT de Zonas" cmd /k "cd /d %~dp0simulador && python simulador.py"
-
-timeout /t 2 /nobreak > nul
-
-echo [3/3] Iniciando Dashboard Web React / Next.js (Puerto 3000)...
-start "Frontend Next.js (Puerto 3000)" cmd /k "cd /d %~dp0frontend && npm run dev"
-
+echo [1/3] Construyendo e iniciando contenedores Docker (EMQX, MySQL, FastAPI, Simulador 5 Zonas, Web)...
+docker compose up -d --build
 echo.
-echo =========================================================================
-echo  ¡SISTEMA DESPLEGADO EXITOSAMENTE!
-echo  - Dashboard Web:  http://localhost:3000
-echo  - API Swagger:    http://localhost:8000/docs
-echo  - EMQX Broker:    http://localhost:18083 (admin / public)
-echo  - phpMyAdmin:     http://localhost:8085 (emqx_user / emqx_pass)
-echo =========================================================================
+echo [2/3] Verificando estado de los contenedores...
+docker compose ps
+echo.
+echo [3/3] Servicios disponibles:
+echo   - Dashboard Web Next.js 2.0 : http://localhost:3000
+echo   - Backend FastAPI (Swagger) : http://localhost:8000/docs
+echo   - Consola EMQX Broker       : http://localhost:18083 (admin / public)
+echo   - phpMyAdmin MySQL          : http://localhost:8080  (iot_user / iot_password_2025)
+echo.
+echo Para iniciar la Aplicacion Movil (React Native / Expo):
+echo   cd mobile ^&^& npm start
+echo ============================================================================
 pause

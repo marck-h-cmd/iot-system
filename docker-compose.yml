@@ -1,5 +1,5 @@
 services:
-  # 1. Broker MQTT para recepción de datos físicos (Nano/ESP32) y virtuales
+  # 1. Broker MQTT EMQX para recepción de telemetría (Simulador 5 zonas / Hardware futuro)
   emqx:
     image: emqx/emqx:latest
     restart: always
@@ -32,7 +32,7 @@ services:
     networks:
       - iot_network
 
-  # 3. Backend REST & Motor de Inteligencia Artificial (FastAPI + Scikit-Learn)
+  # 3. Backend REST Unificado & Motor ML (FastAPI + Scikit-Learn + SciPy)
   backend:
     build:
       context: ./backend
@@ -50,13 +50,14 @@ services:
       - MQTT_PORT=1883
       - MQTT_USER=sensor_iot
       - MQTT_PASS=marck124M
+      - OPERATION_MODE=simulacion
     depends_on:
       - emqx
       - mysql
     networks:
       - iot_network
 
-  # 4. Inyector y Simulador de Zonas Virtuales (PC 3, PC 4, PC 5)
+  # 4. Simulador Integrado de 5 Zonas Térmicas y Actuadores (PC 1 a PC 5)
   simulador:
     build:
       context: ./simulador
@@ -67,6 +68,8 @@ services:
       - MQTT_PORT=1883
       - MQTT_USER=sensor_iot
       - MQTT_PASS=marck124M
+      - SIMULATION_MODE=5_zonas
+      - DEFAULT_SCENARIO=demostracion
     depends_on:
       - emqx
       - backend
@@ -88,7 +91,7 @@ services:
     networks:
       - iot_network
 
-  # 6. Frontend Web Dashboard (Next.js + Recharts + TailwindCSS)
+  # 6. Frontend Web Dashboard Profesional (Next.js 14 + Recharts + TailwindCSS)
   frontend:
     build:
       context: ./frontend

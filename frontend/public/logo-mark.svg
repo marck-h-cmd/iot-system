@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="scBg" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0B1324"/>
+      <stop offset="100%" stop-color="#060A14"/>
+    </linearGradient>
+    <linearGradient id="scCyan" x1="16" y1="16" x2="112" y2="112" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="60%" stop-color="#06B6D4"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="scViolet" x1="30" y1="20" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#A855F7"/>
+      <stop offset="100%" stop-color="#6366F1"/>
+    </linearGradient>
+  </defs>
+  <!-- Hexagonal industrial shield -->
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#scBg)" stroke="#1E293B" stroke-width="3"/>
+  <path d="M64 16L104 39V89L64 112L24 89V39L64 16Z" stroke="url(#scCyan)" stroke-width="2.5" stroke-opacity="0.45" fill="#0F172A" fill-opacity="0.7"/>
+  <!-- Subtle circuit traces -->
+  <path d="M64 16V28M104 39L93 45M104 89L93 83M64 112V100M24 89L35 83M24 39L35 45" stroke="#06B6D4" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="64" cy="28" r="2.5" fill="#22D3EE"/>
+  <circle cx="93" cy="45" r="2.5" fill="#22D3EE"/>
+  <circle cx="93" cy="83" r="2.5" fill="#A855F7"/>
+  <circle cx="64" cy="100" r="2.5" fill="#A855F7"/>
+  <circle cx="35" cy="83" r="2.5" fill="#22D3EE"/>
+  <circle cx="35" cy="45" r="2.5" fill="#22D3EE"/>
+  <!-- Dynamic 3-blade turbine / airflow arcs -->
+  <path d="M64 52C64 38 78 32 86 40C91 45 86 56 73 59" stroke="url(#scCyan)" stroke-width="6" stroke-linecap="round"/>
+  <path d="M74 70C86 77 84 92 73 95C66 97 59 88 63 75" stroke="url(#scViolet)" stroke-width="6" stroke-linecap="round"/>
+  <path d="M54 70C42 77 33 65 39 55C43 49 54 51 60 62" stroke="url(#scCyan)" stroke-width="6" stroke-linecap="round"/>
+  <!-- Thermal core -->
+  <circle cx="64" cy="64" r="11" fill="#0B1324" stroke="#22D3EE" stroke-width="3"/>
+  <circle cx="64" cy="64" r="4.5" fill="#10B981"/>
+</svg>

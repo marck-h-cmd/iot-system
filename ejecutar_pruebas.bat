@@ -1,29 +1,18 @@
 @echo off
 chcp 65001 > nul
-cls
-echo =========================================================================
-echo  EJECUTANDO BATERÍA DE PRUEBAS DEL SISTEMA DE ENFRIAMIENTO IOT
-echo =========================================================================
+echo ============================================================================
+echo   SMART COOLING IoT 2.0 — SUITE DE PRUEBAS AUTOMATIZADAS (UNITARIAS + E2E)
+echo ============================================================================
 echo.
-echo [1/2] Ejecutando pruebas unitarias de Base de Datos, ML y Actuadores...
-python tests/test_sistema_completo.py
-if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Las pruebas de test_sistema_completo.py fallaron.
-    pause
-    exit /b %ERRORLEVEL%
-)
-
+echo Copiando suite de pruebas actualizada al contenedor backend...
+docker cp tests/test_sistema_completo.py iot-system-backend-1:/app/tests/test_sistema_completo.py
+docker cp tests/test_api_y_mqtt_e2e.py iot-system-backend-1:/app/tests/test_api_y_mqtt_e2e.py
 echo.
-echo [2/2] Ejecutando pruebas End-to-End con FastAPI y Broker EMQX...
-python tests/test_api_y_mqtt_e2e.py
-if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Las pruebas de test_api_y_mqtt_e2e.py fallaron.
-    pause
-    exit /b %ERRORLEVEL%
-)
-
+echo [1/2] Ejecutando Pruebas Unitarias y de Base de Datos (test_sistema_completo.py)...
+docker exec -e PYTHONPATH=/app iot-system-backend-1 python /app/tests/test_sistema_completo.py
 echo.
-echo =========================================================================
-echo  ¡TODAS LAS PRUEBAS HAN FINALIZADO SATISFACTORIAMENTE (100%% APROBADAS)!
-echo =========================================================================
+echo [2/2] Ejecutando Pruebas End-to-End FastAPI + MQTT + Simulador (test_api_y_mqtt_e2e.py)...
+docker exec -e PYTHONPATH=/app iot-system-backend-1 python /app/tests/test_api_y_mqtt_e2e.py
+echo.
+echo ============================================================================
 pause

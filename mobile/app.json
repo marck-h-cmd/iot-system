@@ -1,19 +1,11 @@
 {
   "expo": {
-    "name": "Smart Cooling IoT",
-    "slug": "smart-cooling-mobile",
-    "version": "1.0.0",
+    "name": "SMART COOLING IoT 2.0",
+    "slug": "smart-cooling-iot-unt",
+    "version": "2.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "dark",
-    "ios": {
-      "supportsTablet": true
-    },
-    "android": {
-      "package": "com.unt.smartcooling",
-      "usesCleartextTraffic": true
-    },
-    "web": {
-      "bundler": "metro"
-    }
+    "userInterfaceStyle": "automatic",
+    "platforms": ["ios", "android", "web"],
+    "assetBundlePatterns": ["**/*"]
   }
 }
