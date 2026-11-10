@@ -14,8 +14,8 @@ echo.
 echo [3/3] Servicios disponibles:
 echo   - Dashboard Web Next.js 2.0 : http://localhost:3000
 echo   - Backend FastAPI (Swagger) : http://localhost:8000/docs
-echo   - Consola EMQX Broker       : http://localhost:18083 (admin / public)
-echo   - phpMyAdmin MySQL          : http://localhost:8080  (iot_user / iot_password_2025)
+echo   - Consola EMQX Broker       : http://localhost:18083 (admin / public123)
+echo   - phpMyAdmin MySQL          : http://localhost:8085  (emqx_user / emqx_pass)
 echo.
 echo Para iniciar la Aplicacion Movil (React Native / Expo):
 echo   cd mobile ^&^& npm start

@@ -9,7 +9,7 @@ services:
       - "18083:18083"    # Dashboard Web EMQX
     environment:
       - EMQX_DASHBOARD__DEFAULT_USERNAME=admin
-      - EMQX_DASHBOARD__DEFAULT_PASSWORD=public
+      - EMQX_DASHBOARD__DEFAULT_PASSWORD=public123
     volumes:
       - emqx_data:/opt/emqx/data
     networks:
