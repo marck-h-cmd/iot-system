@@ -7,6 +7,38 @@ export type EscenarioSimulacion =
 
 export type ModoControl = "autonomo" | "manual";
 
+export type ModoOperacionSistema = "simulacion" | "real" | "hibrido";
+
+export interface HardwareESP32Estado {
+  esp32_url: string;
+  poll_interval_s: number;
+  timeout_s: number;
+  conectado: boolean;
+  estado_enlace: "CONECTADO" | "DESCONECTADO" | "TELEMETRIA_ANTIGUA" | "ERROR_SENSOR";
+  latencia_ms: number | null;
+  edad_trama_s: number;
+  total_intentos: number;
+  total_exitosos: number;
+  total_fallos: number;
+  tasa_exito_pct: number;
+  ultimo_exito_ts: number;
+  ultimo_error: string | null;
+  mapeo_sensores: {
+    ds18b20: string;
+    dht11: string;
+  };
+  datos_actuales: {
+    temp: number | null;
+    tdht: number | null;
+    hum: number | null;
+    ventilador: boolean;
+    error: boolean;
+    edad: number;
+    angulo?: number;
+    modo_hardware?: string;
+  };
+}
+
 export interface ZonaEstado {
   temperatura: number;
   humedad: number;
@@ -19,6 +51,10 @@ export interface ZonaEstado {
   sensor: string;
   tipo_sensor?: string;
   origen_datos?: string;
+  origen?: "real" | "virtual" | "sin_sensor";
+  estado_telemetria?: string;
+  edad_trama_s?: number;
+  ultima_temperatura_valida?: number | null;
   modo_operacion?: string;
   escenario_simulacion?: EscenarioSimulacion;
   disponible: boolean;
@@ -41,6 +77,7 @@ export interface EstadoActualResponse {
   comandos_enviados: number;
   acks_recibidos: number;
   latencia_ultima_ms: number | null;
+  hardware_esp32?: HardwareESP32Estado;
   metricas_ml: {
     r2_score: number | null;
     mae: number | null;

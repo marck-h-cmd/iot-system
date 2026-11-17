@@ -7,6 +7,27 @@ export type EscenarioSimulacion =
 
 export type ModoControl = "autonomo" | "manual";
 
+export type ModoOperacionSistema = "simulacion" | "real" | "hibrido";
+
+export interface HardwareESP32Estado {
+  esp32_url: string;
+  poll_interval_s: number;
+  timeout_s: number;
+  conectado: boolean;
+  estado_enlace: string;
+  latencia_ms: number | null;
+  edad_trama_s: number;
+  datos_actuales: {
+    temp: number | null;
+    tdht: number | null;
+    hum: number | null;
+    ventilador: boolean;
+    error: boolean;
+    edad: number;
+    angulo?: number;
+  };
+}
+
 export interface ZonaEstado {
   temperatura: number;
   humedad: number;
@@ -18,7 +39,10 @@ export interface ZonaEstado {
   nombre: string;
   sensor: string;
   tipo_sensor?: string;
+  origen?: "real" | "virtual" | "sin_sensor";
   origen_datos?: string;
+  estado_telemetria?: string;
+  edad_trama_s?: number;
   modo_operacion?: string;
   escenario_simulacion?: EscenarioSimulacion;
   disponible: boolean;
@@ -54,6 +78,7 @@ export interface EstadoActualResponse {
   comandos_enviados: number;
   acks_recibidos: number;
   latencia_ultima_ms: number | null;
+  hardware_esp32?: HardwareESP32Estado;
   metricas_ml: {
     r2_score: number | null;
     mae: number | null;

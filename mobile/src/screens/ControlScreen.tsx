@@ -118,12 +118,32 @@ export const ControlScreen: React.FC<ControlScreenProps> = ({
             style={[
               styles.simTag,
               {
-                backgroundColor: theme.amberSoft,
+                backgroundColor:
+                  estadoActual?.modo_operacion === "real" ||
+                  estadoActual?.modo_operacion === "hardware_real"
+                    ? theme.emeraldSoft
+                    : theme.amberSoft,
               },
             ]}
           >
-            <Text style={[styles.simTagText, { color: theme.amber }]}>
-              Simulación
+            <Text
+              style={[
+                styles.simTagText,
+                {
+                  color:
+                    estadoActual?.modo_operacion === "real" ||
+                    estadoActual?.modo_operacion === "hardware_real"
+                      ? theme.emerald
+                      : theme.amber,
+                },
+              ]}
+            >
+              {estadoActual?.modo_operacion === "real" ||
+              estadoActual?.modo_operacion === "hardware_real"
+                ? "Hardware Real"
+                : estadoActual?.modo_operacion === "hibrido"
+                ? "Modo Híbrido"
+                : "Simulación"}
             </Text>
           </View>
         </View>

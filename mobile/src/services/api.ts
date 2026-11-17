@@ -237,16 +237,26 @@ export async function fetchMobileDashboardBundle(apiUrl: string) {
       z.temperatura_actual != null ? Number(z.temperatura_actual) : 25.0;
     const tPred =
       z.temperatura_predicha != null ? Number(z.temperatura_predicha) : tAct;
+    const orig = (z.origen || "virtual") as "real" | "virtual" | "sin_sensor";
+    const origLabel =
+      orig === "real"
+        ? "REAL"
+        : orig === "sin_sensor"
+        ? "SIN SENSOR"
+        : "SIMULADA";
     zonasMap[zId] = {
       temperatura: tAct,
-      humedad: 52.0,
+      humedad: z.humedad != null ? Number(z.humedad) : 52.0,
       prediccion_10m: tPred,
-      alerta_preventiva: tPred >= 35.0,
+      alerta_preventiva: z.temperatura_actual != null && tPred >= 35.0,
       angulo_servo: z.angulo_servo_zona ?? z.angulo_servo ?? 0,
       nombre: z.nombre || zId.toUpperCase(),
       sensor: z.sensor || "Sonda Virtual (Simulado)",
-      origen_datos: "Simulado",
-      modo_operacion: "simulacion",
+      origen: orig,
+      origen_datos: origLabel,
+      estado_telemetria: z.estado_telemetria || (orig === "real" ? "ACTUAL" : "SIMULADA"),
+      edad_trama_s: z.edad_trama_s ?? -1,
+      modo_operacion: sys.modo_operacion_sistema || "simulacion",
       escenario_simulacion: (sys.escenario_simulacion ||
         "demostracion") as EscenarioSimulacion,
       disponible: z.disponible !== false && z.temperatura_actual !== null,
@@ -299,6 +309,7 @@ export async function fetchMobileDashboardBundle(apiUrl: string) {
       sys.ultima_latencia_ms != null
         ? Number(sys.ultima_latencia_ms)
         : dim3.latencia_promedio_ms ?? null,
+    hardware_esp32: rawControlEstado?.hardware_esp32 || sys.hardware_esp32 || undefined,
     metricas_ml: {
       r2_score: dim2.r2 ?? null,
       mae: dim2.mae ?? null,
@@ -640,5 +651,19 @@ export async function testBackendHealthMobile(apiUrl: string) {
   const cleanUrl = apiUrl.replace(/\/+$/, "");
   const res = await fetch(`${cleanUrl}/api/health`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function cambiarModoOperacionSistemaMobile(
+  apiUrl: string,
+  modo: "simulacion" | "real" | "hibrido"
+) {
+  const cleanUrl = apiUrl.replace(/\/+$/, "");
+  const res = await fetch(`${cleanUrl}/api/sistema/modo-operacion`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ modo }),
+  });
+  if (!res.ok) throw new Error("Error al cambiar modo de operación del sistema");
   return res.json();
 }

@@ -190,16 +190,27 @@ function normalizeEstadoActual(
     const zId = z.zona || "zona1";
     const tAct = z.temperatura_actual != null ? Number(z.temperatura_actual) : 25.0;
     const tPred = z.temperatura_predicha != null ? Number(z.temperatura_predicha) : tAct;
+    const orig = (z.origen || "virtual") as "real" | "virtual" | "sin_sensor";
+    const origLabel =
+      orig === "real"
+        ? "REAL"
+        : orig === "sin_sensor"
+        ? "SIN SENSOR FÍSICO"
+        : "SIMULADA";
     zonasMap[zId] = {
       temperatura: tAct,
       humedad: z.humedad != null ? Number(z.humedad) : 52.0,
       prediccion_10m: tPred,
-      alerta_preventiva: tPred >= 35.0,
+      alerta_preventiva: z.temperatura_actual != null && tPred >= 35.0,
       angulo_servo: z.angulo_servo_zona ?? z.angulo_servo ?? 0,
       nombre: z.nombre || zId.toUpperCase(),
       sensor: z.sensor || "Sonda Virtual (Simulado)",
-      origen_datos: z.origen === "virtual" ? "Simulado" : z.origen || "Simulado",
-      modo_operacion: "simulacion",
+      origen: orig,
+      origen_datos: origLabel,
+      estado_telemetria: z.estado_telemetria || (orig === "real" ? "ACTUAL" : "SIMULADA"),
+      edad_trama_s: z.edad_trama_s ?? -1,
+      ultima_temperatura_valida: z.ultima_temperatura_valida ?? null,
+      modo_operacion: sys.modo_operacion_sistema || "simulacion",
       escenario_simulacion: (sys.escenario_simulacion || "demostracion") as EscenarioSimulacion,
       disponible: z.disponible !== false && z.temperatura_actual !== null,
       nivel_termico: (z.nivel_termico || "normal") as any,
@@ -208,6 +219,7 @@ function normalizeEstadoActual(
   }
 
   const dim2 = rawIndicadores?.dimension_2 || {};
+  const hwEsp32 = rawControlEstado?.hardware_esp32 || sys.hardware_esp32 || undefined;
   return {
     modo_operacion: sys.modo_operacion_sistema || "simulacion",
     escenario_simulacion: (sys.escenario_simulacion || "demostracion") as EscenarioSimulacion,
@@ -225,6 +237,7 @@ function normalizeEstadoActual(
       sys.ultima_latencia_ms != null
         ? Number(sys.ultima_latencia_ms)
         : rawIndicadores?.dimension_3?.latencia_promedio_ms ?? null,
+    hardware_esp32: hwEsp32,
     metricas_ml: {
       r2_score: dim2.r2 ?? null,
       mae: dim2.mae ?? null,
@@ -581,6 +594,35 @@ export async function reiniciarSimulacionApi() {
     body: JSON.stringify({}),
   });
   if (!res.ok) throw new Error("Error al reiniciar simulación");
+  return res.json();
+}
+
+export async function cambiarModoOperacionSistemaApi(
+  modo: "simulacion" | "real" | "hibrido"
+) {
+  const baseUrl = getApiBaseUrl();
+  const res = await fetch(`${baseUrl}/api/sistema/modo-operacion`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ modo }),
+  });
+  if (!res.ok) throw new Error("Error al cambiar modo de operación del sistema");
+  return res.json();
+}
+
+export async function actualizarConfiguracionHardwareApi(payload: {
+  esp32_url?: string;
+  poll_interval_s?: number;
+  mapping_ds18b20?: string;
+  mapping_dht11?: string;
+}) {
+  const baseUrl = getApiBaseUrl();
+  const res = await fetch(`${baseUrl}/api/hardware/configuracion`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error("Error al actualizar configuración de hardware ESP32");
   return res.json();
 }
 

@@ -26,6 +26,7 @@ import {
 import {
   cambiarEscenarioSimulacionApi,
   cambiarModoControlApi,
+  cambiarModoOperacionSistemaApi,
   enviarComandoManualApi,
   fetchDashboardBundle,
   reiniciarSimulacionApi,
@@ -200,6 +201,19 @@ export default function SmartCoolingDashboard() {
     }
   };
 
+  const handleCambiarModoOperacionSistema = async (
+    modo: "simulacion" | "real" | "hibrido"
+  ) => {
+    try {
+      await cambiarModoOperacionSistemaApi(modo);
+      setFeedbackControl(`Modo del sistema actualizado a: ${modo.toUpperCase()}`);
+      await cargarDatos();
+      setTimeout(() => setFeedbackControl(null), 3500);
+    } catch {
+      setFeedbackControl("Error al cambiar el modo de operación.");
+    }
+  };
+
   const chartHistory = useMemo(() => {
     return historial
       .filter((item) => item.zona === zonaSeleccionadaChart)
@@ -370,16 +384,54 @@ export default function SmartCoolingDashboard() {
               )}
             </div>
 
-            {/* Indicador claro de modo simulación */}
-            <span
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border ${
+            {/* Selector de modo operacional: Simulación / Híbrido / Real (ESP32) */}
+            <div
+              className={`inline-flex items-center p-0.5 rounded-lg border text-xs font-medium ${
                 darkMode
-                  ? "bg-amber-500/10 border-amber-500/30 text-amber-300"
-                  : "bg-amber-50 border-amber-200 text-amber-800"
+                  ? "bg-[#111C2E] border-slate-700"
+                  : "bg-slate-100 border-slate-200"
               }`}
+              title="Seleccionar origen de telemetría: Simulación, Híbrido o Hardware Real (ESP32)"
             >
-              Modo simulación
-            </span>
+              {(
+                [
+                  { id: "simulacion", label: "Simulación" },
+                  { id: "hibrido", label: "Híbrido" },
+                  { id: "real", label: "Hardware Real" },
+                ] as const
+              ).map((m) => {
+                const modoSys =
+                  estadoActual?.modo_operacion === "hardware_real"
+                    ? "real"
+                    : estadoActual?.modo_operacion || "simulacion";
+                const active = modoSys === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => handleCambiarModoOperacionSistema(m.id)}
+                    className={`px-2.5 py-1 rounded-md transition-colors ${
+                      active
+                        ? m.id === "real"
+                          ? darkMode
+                            ? "bg-emerald-500 text-slate-950 font-semibold"
+                            : "bg-emerald-600 text-white font-semibold"
+                          : m.id === "hibrido"
+                          ? darkMode
+                            ? "bg-amber-500 text-slate-950 font-semibold"
+                            : "bg-amber-600 text-white font-semibold"
+                          : darkMode
+                          ? "bg-sky-500 text-slate-950 font-semibold"
+                          : "bg-white text-slate-900 shadow-xs font-semibold"
+                        : darkMode
+                        ? "text-slate-300 hover:text-white"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
 
             {/* Selector rápido Manual / Automático */}
             <button

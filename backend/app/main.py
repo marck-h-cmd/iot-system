@@ -10,6 +10,7 @@ from app.database import db_manager
 from app.ml_model import ml_predictor
 from app.mqtt_service import mqtt_service
 from app.statistics_service import statistics_service
+from app.esp32_client import esp32_client
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,11 +20,13 @@ logger = logging.getLogger("backend.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 Iniciando SMART COOLING IoT 2.0 — Backend Unificado & Motor ML...")
+    logger.info("🚀 Iniciando SMART COOLING IoT 2.0 — Backend Unificado, Gateway ESP32 & Motor ML...")
     db_manager.limpiar_y_sembrar_datos_demo()
     mqtt_service.iniciar()
+    esp32_client.iniciar()
     yield
-    logger.info("🛑 Apagando servicio Backend & IA...")
+    logger.info("🛑 Apagando servicio Backend, ESP32 Polling & IA...")
+    esp32_client.detener()
     mqtt_service.detener()
 
 app = FastAPI(
@@ -62,6 +65,15 @@ class EscenarioSimulacionRequest(BaseModel):
 class ReiniciarSimulacionRequest(BaseModel):
     escenario: Optional[str] = Field(None, description="Escenario opcional al cual reiniciar la simulación")
 
+class ModoOperacionSistemaRequest(BaseModel):
+    modo: str = Field(..., description="Modo arquitectónico: 'simulacion', 'real' o 'hibrido'")
+
+class ConfiguracionHardwareRequest(BaseModel):
+    esp32_url: Optional[str] = Field(None, description="URL o IP del ESP32, ej. http://192.168.0.152/datos")
+    poll_interval_s: Optional[float] = Field(None, ge=0.5, le=30.0, description="Intervalo de consulta en segundos")
+    mapping_ds18b20: Optional[str] = Field(None, description="Zona asignada al DS18B20 (zona1 a zona5)")
+    mapping_dht11: Optional[str] = Field(None, description="Zona asignada al DHT11 (zona1 a zona5)")
+
 # ================= ENDPOINTS DE LA API REST =================
 
 @app.get("/")
@@ -87,6 +99,7 @@ def health_check():
         db_ok = False
 
     estado_sys = mqtt_service.estado_sistema
+    estado_hw = esp32_client.obtener_estado()
     return {
         "status": "healthy" if (db_ok and mqtt_service._conectado) else "degraded",
         "version": "2.0.0",
@@ -95,6 +108,9 @@ def health_check():
         "escenario_simulacion": estado_sys["escenario_simulacion"],
         "database_connected": db_ok,
         "mqtt_connected": mqtt_service._conectado,
+        "esp32_connected": estado_hw["conectado"],
+        "esp32_estado_enlace": estado_hw["estado_enlace"],
+        "esp32_url": estado_hw["esp32_url"],
         "total_mensajes": estado_sys["total_mensajes_recibidos"],
         "total_acks": estado_sys["total_acks_recibidos"],
         "ultima_actualizacion": estado_sys["ultima_actualizacion_telemetria"]
@@ -104,17 +120,17 @@ def health_check():
 def obtener_telemetria_actual():
     """
     Retorna el estado enriquecido y sincronizado de las 5 computadoras (PC 1 a PC 5).
-    Incluye disponibilidad de señal, predicción a +10m, estado de refrigeración y nivel térmico.
+    Incluye disponibilidad de señal, predicción a +10m, estado de refrigeración, origen ('real' o 'virtual') y nivel térmico.
     """
     estado_mem = mqtt_service.obtener_estado_actual()
     zonas_mem = {z["zona"]: dict(z) for z in estado_mem["zonas"]}
 
-    # Si aún no han llegado mensajes MQTT desde el arranque, complementar con último registro en BD
+    # Si aún no han llegado mensajes MQTT desde el arranque, complementar SOLO zonas virtuales con último registro en BD
     if estado_mem["sistema"]["total_mensajes_recibidos"] == 0:
         registros_bd = db_manager.obtener_telemetria_actual()
         for reg in registros_bd:
             z_id = reg["zona"]
-            if z_id in zonas_mem:
+            if z_id in zonas_mem and zonas_mem[z_id].get("origen") == "virtual":
                 zonas_mem[z_id]["temperatura_actual"] = reg["temperatura_actual"]
                 zonas_mem[z_id]["temperatura_predicha"] = reg["temperatura_predicha"]
                 zonas_mem[z_id]["timestamp"] = reg.get("timestamp")
@@ -310,3 +326,44 @@ def reiniciar_simulacion(solicitud: Optional[ReiniciarSimulacionRequest] = None)
     """Reinicia las temperaturas de las 5 zonas y el estado del simulador"""
     esc = solicitud.escenario if solicitud else None
     return mqtt_service.reiniciar_simulacion(escenario=esc)
+
+# ================= ENDPOINTS DE HARDWARE REAL (ESP32 + ARDUINO NANO) =================
+
+@app.post("/api/sistema/modo-operacion")
+def cambiar_modo_operacion_sistema(solicitud: ModoOperacionSistemaRequest):
+    """
+    Alterna el modo global de operación entre:
+    - 'simulacion': 5 zonas simuladas completas.
+    - 'real': Lecturas físicas exclusivas desde ESP32 (DHT11 y DS18B20); zonas sin sensor físico reportan SIN_SENSOR_FISICO.
+    - 'hibrido': Combina las 2 zonas físicas reales del ESP32 con las 3 zonas simuladas restantes.
+    """
+    try:
+        return mqtt_service.cambiar_modo_operacion_sistema(solicitud.modo)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+@app.get("/api/hardware/estado")
+def obtener_estado_hardware():
+    """Retorna el diagnóstico detallado del enlace HTTP con el ESP32, latencia, edad de trama y mapeo de sensores"""
+    return esp32_client.obtener_estado()
+
+@app.get("/api/hardware/datos")
+def obtener_datos_hardware():
+    """Retorna la última trama cruda recibida de GET http://<ESP32_IP>/datos y las zonas físicas procesadas"""
+    return {
+        "modo_operacion": mqtt_service.estado_sistema["modo_operacion_sistema"],
+        "estado_enlace": esp32_client.estado_enlace,
+        "conectado": esp32_client.conectado,
+        "datos_crudos": esp32_client.datos_crudos,
+        "zonas_fisicas": esp32_client.obtener_lecturas_para_zonas()
+    }
+
+@app.post("/api/hardware/configuracion")
+def actualizar_configuracion_hardware(solicitud: ConfiguracionHardwareRequest):
+    """Permite cambiar en caliente la IP/URL del ESP32, intervalo de polling o asignación de zonas de los sensores físicos"""
+    return esp32_client.actualizar_configuracion(
+        url=solicitud.esp32_url,
+        poll_interval=solicitud.poll_interval_s,
+        mapping_ds18b20=solicitud.mapping_ds18b20,
+        mapping_dht11=solicitud.mapping_dht11
+    )

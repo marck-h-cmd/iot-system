@@ -86,8 +86,113 @@ export function LiveMonitoringView({
   const textSecondary = darkMode ? "text-slate-300" : "text-slate-600";
   const textMuted = darkMode ? "text-slate-400" : "text-slate-500";
 
+  const modoSys =
+    estadoActual?.modo_operacion === "hardware_real"
+      ? "real"
+      : estadoActual?.modo_operacion || "simulacion";
+  const hwEsp32 = estadoActual?.hardware_esp32;
+
   return (
     <div className="space-y-5">
+      {/* Banner de Telemetría Física ESP32 + Arduino Nano (Visible en Modo Real e Híbrido) */}
+      {(modoSys === "real" || modoSys === "hibrido") && (
+        <div
+          className={`rounded-xl border p-4 transition-all ${
+            hwEsp32?.conectado
+              ? darkMode
+                ? "bg-emerald-950/30 border-emerald-500/40"
+                : "bg-emerald-50 border-emerald-200"
+              : darkMode
+              ? "bg-amber-950/30 border-amber-500/40"
+              : "bg-amber-50 border-amber-200"
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${
+                  hwEsp32?.conectado ? "bg-emerald-500" : "bg-amber-500"
+                }`}
+              />
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-bold uppercase ${textPrimary}`}>
+                    Gateway Físico ESP32 + Arduino Nano ({modoSys.toUpperCase()})
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
+                      hwEsp32?.estado_enlace === "CONECTADO"
+                        ? darkMode
+                          ? "bg-emerald-500/20 text-emerald-300"
+                          : "bg-emerald-100 text-emerald-800"
+                        : darkMode
+                        ? "bg-rose-500/20 text-rose-300"
+                        : "bg-red-100 text-red-800"
+                    }`}
+                  >
+                    {hwEsp32?.estado_enlace || "DESCONECTADO"}
+                  </span>
+                </div>
+                <p className={`text-xs mt-0.5 font-mono ${textSecondary}`}>
+                  Endpoint: {hwEsp32?.esp32_url || "http://192.168.0.152/datos"} •{" "}
+                  {hwEsp32?.conectado
+                    ? `Edad de trama: ${hwEsp32.edad_trama_s}s • Latencia HTTP: ${
+                        hwEsp32.latencia_ms ?? "—"
+                      } ms`
+                    : `Sin respuesta del ESP32 (${
+                        hwEsp32?.ultimo_error || "Verifique IP y red local"
+                      })`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 text-xs font-mono">
+              <div>
+                <span className={`block text-[10px] uppercase ${textMuted}`}>
+                  DS18B20 (Sonda)
+                </span>
+                <span className={`font-semibold ${textPrimary}`}>
+                  {hwEsp32?.conectado && hwEsp32?.datos_actuales?.temp != null
+                    ? `${Number(hwEsp32.datos_actuales.temp).toFixed(1)} °C`
+                    : "DESCONECTADO"}
+                </span>
+              </div>
+              <div>
+                <span className={`block text-[10px] uppercase ${textMuted}`}>
+                  DHT11 (Temp / Hum)
+                </span>
+                <span className={`font-semibold ${textPrimary}`}>
+                  {hwEsp32?.conectado && hwEsp32?.datos_actuales?.tdht != null
+                    ? `${Number(hwEsp32.datos_actuales.tdht).toFixed(1)} °C / ${
+                        hwEsp32.datos_actuales.hum ?? "—"
+                      }%`
+                    : "DESCONECTADO"}
+                </span>
+              </div>
+              <div>
+                <span className={`block text-[10px] uppercase ${textMuted}`}>
+                  Ventilador Físico
+                </span>
+                <span
+                  className={`font-semibold ${
+                    hwEsp32?.datos_actuales?.ventilador
+                      ? darkMode
+                        ? "text-emerald-400"
+                        : "text-emerald-700"
+                      : textSecondary
+                  }`}
+                >
+                  {hwEsp32?.conectado
+                    ? hwEsp32.datos_actuales.ventilador
+                      ? "ENCENDIDO"
+                      : "APAGADO"
+                    : "—"}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Alertas compactas y expandibles */}
       {alertas.length > 0 && (
         <div
@@ -468,9 +573,30 @@ export function LiveMonitoringView({
                     }`}
                   >
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span className={`text-sm font-semibold ${textPrimary}`}>
                           {zData.nombre}
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                            zData.origen === "real"
+                              ? darkMode
+                                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                : "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                              : zData.origen === "sin_sensor"
+                              ? darkMode
+                                ? "bg-slate-800 text-slate-400"
+                                : "bg-slate-200 text-slate-700"
+                              : darkMode
+                              ? "bg-sky-500/15 text-sky-300"
+                              : "bg-blue-50 text-blue-700"
+                          }`}
+                        >
+                          {zData.origen === "real"
+                            ? "REAL"
+                            : zData.origen === "sin_sensor"
+                            ? "SIN SENSOR"
+                            : "SIMULADA"}
                         </span>
                         <span className={`text-xs font-mono ${textMuted}`}>
                           {zData.angulo_servo}°
@@ -485,7 +611,17 @@ export function LiveMonitoringView({
                       </div>
                       <p className={`text-xs truncate mt-0.5 ${textSecondary}`}>
                         {sinSenal
-                          ? "Sonda sin respuesta"
+                          ? zData.origen === "sin_sensor"
+                            ? "Sin sensor físico asignado"
+                            : zData.estado_telemetria === "DESCONECTADO"
+                            ? "ESP32 Desconectado"
+                            : zData.estado_telemetria === "TELEMETRIA_ANTIGUA"
+                            ? `Lectura antigua (edad: ${zData.edad_trama_s}s)`
+                            : "Sonda sin respuesta"
+                          : zData.origen === "real"
+                          ? `${zData.sensor}${
+                              zData.humedad != null ? ` • Hum: ${zData.humedad}%` : ""
+                            }`
                           : `Proyección +10m: ${zData.prediccion_10m.toFixed(1)} °C`}
                       </p>
                     </div>

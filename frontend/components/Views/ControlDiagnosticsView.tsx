@@ -93,8 +93,51 @@ export function ControlDiagnosticsView({
   const textSecondary = darkMode ? "text-slate-300" : "text-slate-600";
   const textMuted = darkMode ? "text-slate-400" : "text-slate-500";
 
+  const modoSys =
+    estadoActual?.modo_operacion === "hardware_real"
+      ? "real"
+      : estadoActual?.modo_operacion || "simulacion";
+  const hwEsp32 = estadoActual?.hardware_esp32;
+
   return (
     <div className="space-y-5">
+      {/* Aviso de Arquitectura Física y Control Bidireccional (Fase 1 vs Fase 3) */}
+      {(modoSys === "real" || modoSys === "hibrido") && (
+        <div
+          className={`rounded-xl border p-4 ${
+            darkMode
+              ? "bg-amber-950/30 border-amber-500/40 text-amber-100"
+              : "bg-amber-50 border-amber-200 text-amber-950"
+          }`}
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wide">
+                Estado del Control Físico (Arduino Nano + ESP32)
+              </h3>
+              <p className="text-xs mt-1 leading-relaxed">
+                El hardware actual opera con enlace unidireccional (<strong>Nano TX D1 → ESP32 RX GPIO16</strong>).
+                El ventilador MOSFET (D4) y el servomotor SG90 (D5) son gobernados autónomamente por el Arduino Nano
+                (encendido ≥ 30.0 °C o ante fallo de DS18B20; apagado ≤ 29.0 °C). Los controles manuales inferiores
+                aplican al simulador salvo que se instale el enlace bidireccional de Fase 3 (<strong>ESP32 TX GPIO17 → Nano RX D0</strong>).
+              </p>
+            </div>
+            <div className="shrink-0 text-right font-mono text-xs">
+              <span className="block font-semibold">
+                ESP32: {hwEsp32?.estado_enlace || "DESCONECTADO"}
+              </span>
+              <span className="opacity-80">
+                Fan Físico:{" "}
+                {hwEsp32?.conectado
+                  ? hwEsp32.datos_actuales?.ventilador
+                    ? "ON (Activo)"
+                    : "OFF (Espera)"
+                  : "Sin enlace"}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
       {/* 1. Estado del sistema (barra operacional compacta) */}
       <div
         className={`${cardClass} rounded-xl p-4 grid grid-cols-2 sm:grid-cols-4 gap-4`}

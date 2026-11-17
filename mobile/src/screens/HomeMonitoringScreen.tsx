@@ -309,19 +309,63 @@ export const HomeMonitoringScreen: React.FC<HomeMonitoringScreenProps> = ({
                   </View>
 
                   <View style={{ flex: 1 }}>
-                    <Text
-                      style={[styles.zoneName, { color: theme.textPrimary }]}
-                      numberOfLines={1}
-                    >
-                      {z?.nombre || cfg.nombre}
-                    </Text>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <Text
+                        style={[styles.zoneName, { color: theme.textPrimary }]}
+                        numberOfLines={1}
+                      >
+                        {z?.nombre || cfg.nombre}
+                      </Text>
+                      <View
+                        style={{
+                          paddingHorizontal: 5,
+                          paddingVertical: 1,
+                          borderRadius: 4,
+                          backgroundColor:
+                            z?.origen === "real"
+                              ? theme.emeraldSoft
+                              : z?.origen === "sin_sensor"
+                              ? theme.bgSubCard
+                              : theme.accentSoft,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 9,
+                            fontWeight: "700",
+                            color:
+                              z?.origen === "real"
+                                ? theme.emerald
+                                : z?.origen === "sin_sensor"
+                                ? theme.textSecondary
+                                : theme.accentPrimary,
+                          }}
+                        >
+                          {z?.origen === "real"
+                            ? "REAL"
+                            : z?.origen === "sin_sensor"
+                            ? "SIN SENSOR"
+                            : "SIMULADA"}
+                        </Text>
+                      </View>
+                    </View>
                     <Text
                       style={[
                         styles.zoneMeta,
                         { color: theme.textSecondary },
                       ]}
                     >
-                      {cfg.angulo}° • Pred. +10m: {pred.toFixed(1)} °C
+                      {sinSenal
+                        ? z?.origen === "sin_sensor"
+                          ? "Sin sensor físico asignado"
+                          : z?.estado_telemetria === "DESCONECTADO"
+                          ? "ESP32 Desconectado"
+                          : "Sonda sin señal"
+                        : z?.origen === "real"
+                        ? `${z?.sensor || "Sensor Físico"}${
+                            z?.humedad != null ? ` • Hum: ${z.humedad}%` : ""
+                          }`
+                        : `${cfg.angulo}° • Pred. +10m: ${pred.toFixed(1)} °C`}
                     </Text>
                   </View>
                 </View>

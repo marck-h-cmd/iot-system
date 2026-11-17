@@ -1,222 +1,161 @@
-/**
- * =========================================================================================
- * PROYECTO: Sistema de Enfriamiento Autónomo Inteligente para Equipos Electrónicos (IoT)
- * ENTREGABLE: FASE 1A - Firmware Arduino Nano CH340G (Edge Controller)
- * UNIVERSIDAD: Universidad Nacional de Trujillo
- * =========================================================================================
- * 
- * DESCRIPCIÓN:
- * Este firmware se ejecuta en la placa Arduino Nano (lógica de 5V). Su responsabilidad es:
- * 1. Adquisición de telemetría de 2 sensores físicos:
- *    - PC 1: Sensor DHT11 (Pin Digital D2) -> Zona 1
- *    - PC 2: Sensor DS18B20 (Protocolo 1-Wire en Pin Digital D3) -> Zona 2
- * 2. Transmisión periódica (cada 5 seg) de lecturas empaquetadas en JSON vía Serial hacia el ESP32.
- * 3. Recepción y decodificación de órdenes en JSON desde el ESP32 (Fan State y Ángulo de Servomotor).
- * 4. Control de actuadores físicos:
- *    - Driver MOSFET AOD4184A para encendido/apagado del ventilador axial de 5V (Pin Digital D5).
- *    - Servomotor SG90 controlado por PWM para orientar el flujo de aire (Pin D9: 0°, 90°, 180°).
- * 5. Generación y retorno inmediato de un mensaje JSON de confirmación (ACK) para cálculo de latencia.
- * 
- * LIBRERÍAS REQUERIDAS:
- * - ArduinoJson (v6.x o v7.x) por Benoit Blanchon
- * - DHT sensor library por Adafruit
- * - OneWire por Jim Studt / Paul Stoffregen
- * - DallasTemperature por Miles Burton
- * - Servo (incluida en el core de Arduino)
- * =========================================================================================
- */
-
-#include <Arduino.h>
-#include <ArduinoJson.h>
-#include <DHT.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <DHT.h>
 #include <Servo.h>
 
-// ================= ASIGNACIÓN DE PINES Y HARDWARE =================
-#define PIN_DHT11       2      // Pin digital conectado a la línea DATA del DHT11 (PC 1)
-#define PIN_DS18B20     3      // Pin digital para bus 1-Wire del DS18B20 (PC 2, requiere R pull-up 10k)
-#define PIN_MOSFET_FAN  5      // Pin digital conectado a la compuerta (Gate) del módulo MOSFET AOD4184A
-#define PIN_SERVO_PWM   9      // Pin PWM para control de señal del Servomotor SG90
+// ============================================================================
+// PROYECTO: Sistema de Enfriamiento Autónomo Inteligente para Equipos Electrónicos (IoT)
+// FIRMWARE PRODUCCIÓN: Arduino Nano (Control Local y Adquisición Unidireccional)
+// UNIVERSIDAD: Universidad Nacional de Trujillo
+// ============================================================================
 
-#define DHTTYPE         DHT11  // Modelo del sensor DHT
-#define SERIAL_BAUD     115200 // Velocidad de comunicación UART con ESP32
+// Pines de Conexión
+#define PIN_DHT 2         // DHT11 DATA -> D2
+#define PIN_DS18B20 3     // DS18B20 1-Wire DATA -> D3 (Pull-up 10 kΩ a 5V)
+#define PIN_VENTILADOR 4  // Módulo MOSFET TRIG -> D4
+#define PIN_SERVO 5       // Servomotor SG90 SIGNAL -> D5
 
-// ================= OBJETOS DE HARDWARE =================
-DHT dht(PIN_DHT11, DHTTYPE);
+// Temperaturas de control autónomo local
+const float TEMP_ENCENDIDO = 30.0;
+const float TEMP_APAGADO = 29.0;
+
+// Barrido del servo (orienta el flujo de aire)
+const int ANGULO_MIN = 45;
+const int ANGULO_MAX = 135;
+const int ANGULO_REPOSO = 90;
+const unsigned long PASO_SERVO_MS = 20;  // Velocidad de paso del barrido
+
+// Tiempos de ciclo y conversión
+const unsigned long PERIODO_MS = 2000;
+const unsigned long ESPERA_CONVERSION_MS = 800;
+
+const float INVALIDO = -999.0;
+
 OneWire oneWire(PIN_DS18B20);
-DallasTemperature ds18b20(&oneWire);
-Servo servomotor;
+DallasTemperature sensor(&oneWire);
+DHT dht(PIN_DHT, DHT11);
+Servo servo;
 
-// ================= VARIABLES DE CONTROL Y ESTADO =================
-unsigned long ultimoMuestreo = 0;
-const unsigned long INTERVALO_MUESTREO_MS = 5000; // Meta: Adquisición cada 5 segundos
-uint32_t contadorMensajes = 1;
+bool ventiladorEncendido = false;
+bool esperandoConversion = false;
+unsigned long tCiclo = 0;
+unsigned long tSolicitud = 0;
+unsigned long tServo = 0;
 
-int estadoVentiladorActual = 0;
-int anguloServoActual = 90; // Posición de reposo central (90°)
+int angulo = ANGULO_REPOSO;
+int paso = 1;
 
-String bufferSerial = ""; // Acumulador de caracteres entrantes por Serial
+float ultimaTempDHT = INVALIDO;
+float ultimaHumedad = INVALIDO;
 
-// ================= DECLARACIÓN DE FUNCIONES =================
-void inicializarSensores();
-void procesarComandoSerial(const String& jsonString);
-void transmitirTelemetria();
-void enviarACK(const char* zona, int fanState, int servoAngle, double timestampDecision);
-
-// ================= SETUP =================
 void setup() {
-    // Inicializar puerto Serial para comunicación con Gateway ESP32
-    Serial.begin(SERIAL_BAUD);
-    bufferSerial.reserve(256);
+  Serial.begin(9600);
 
-    // Configurar pines de actuadores
-    pinMode(PIN_MOSFET_FAN, OUTPUT);
-    digitalWrite(PIN_MOSFET_FAN, LOW); // Ventilador apagado por defecto
+  sensor.begin();
+  sensor.setWaitForConversion(false);  // No bloquear el ciclo (el servomotor continúa su barrido)
+  dht.begin();
 
-    servomotor.attach(PIN_SERVO_PWM);
-    servomotor.write(anguloServoActual); // Iniciar en 90° (neutro)
+  pinMode(PIN_VENTILADOR, OUTPUT);
+  digitalWrite(PIN_VENTILADOR, LOW);
 
-    // Inicializar sensores físicos
-    inicializarSensores();
+  servo.attach(PIN_SERVO);
+  servo.write(ANGULO_REPOSO);
 
-    // Pequeño retardo para estabilización de voltajes
-    delay(1000);
+  Serial.println(F("SISTEMA DE ENFRIAMIENTO AUTOMATICO"));
 }
 
-// ================= LOOP PRINCIPAL =================
 void loop() {
-    unsigned long tiempoActual = millis();
+  unsigned long ahora = millis();
 
-    // 1. Escuchar comandos entrantes desde el ESP32 vía Serial UART
-    while (Serial.available() > 0) {
-        char caracter = (char)Serial.read();
-        if (caracter == '\n' || caracter == '\r') {
-            if (bufferSerial.length() > 0) {
-                procesarComandoSerial(bufferSerial);
-                bufferSerial = "";
-            }
-        } else {
-            bufferSerial += caracter;
-        }
-    }
+  // 1) Solicitar conversión de temperatura al DS18B20 cada PERIODO_MS (2 s)
+  if (!esperandoConversion && ahora - tCiclo >= PERIODO_MS) {
+    sensor.requestTemperatures();
+    tSolicitud = ahora;
+    tCiclo = ahora;
+    esperandoConversion = true;
+  }
 
-    // 2. Transmisión periódica de telemetría hacia el ESP32 (cada 5 segundos)
-    if (tiempoActual - ultimoMuestreo >= INTERVALO_MUESTREO_MS) {
-        ultimoMuestreo = tiempoActual;
-        transmitirTelemetria();
-    }
+  // 2) Cuando concluye el tiempo de conversión (800 ms), procesar lecturas
+  if (esperandoConversion && ahora - tSolicitud >= ESPERA_CONVERSION_MS) {
+    esperandoConversion = false;
+    procesarLectura();
+  }
+
+  // 3) Actualizar barrido angular del servomotor sin bloqueo
+  actualizarServo(ahora);
 }
 
-// ================= IMPLEMENTACIÓN DE FUNCIONES =================
+void procesarLectura() {
+  float temperatura = sensor.getTempCByIndex(0);
 
-void inicializarSensores() {
-    dht.begin();
-    ds18b20.begin();
-    ds18b20.setResolution(10); // Resolución de 10 bits (conversión rápida ~187ms)
+  bool error = (temperatura == DEVICE_DISCONNECTED_C ||
+                temperatura < -55.0 ||
+                temperatura > 125.0);
+
+  // Lógica de histéresis y protección térmica segura
+  if (error) {
+    // Ante desconexión o fallo del sensor, ventilador encendido por seguridad obligatoria
+    ventiladorEncendido = true;
+  }
+  else if (temperatura >= TEMP_ENCENDIDO) {
+    ventiladorEncendido = true;
+  }
+  else if (temperatura <= TEMP_APAGADO) {
+    ventiladorEncendido = false;
+  }
+
+  digitalWrite(PIN_VENTILADOR, ventiladorEncendido ? HIGH : LOW);
+
+  // Lectura del sensor ambiental DHT11
+  float h = dht.readHumidity();
+  float tc = dht.readTemperature();
+  if (!isnan(h)) ultimaHumedad = h;
+  if (!isnan(tc)) ultimaTempDHT = tc;
+
+  // Monitor Serial de depuración humana
+  Serial.println(F("------------------------"));
+  if (error) {
+    Serial.println(F("ERROR: DS18B20 desconectado"));
+    Serial.println(F("Ventilador: ENCENDIDO (seguridad)"));
+  } else {
+    Serial.print(F("Temperatura DS18B20: "));
+    Serial.print(temperatura, 1);
+    Serial.println(F(" C"));
+    Serial.print(F("Ventilador: "));
+    Serial.println(ventiladorEncendido ? F("ENCENDIDO") : F("APAGADO"));
+  }
+  Serial.print(F("DHT11: "));
+  Serial.print(ultimaTempDHT, 1);
+  Serial.print(F(" C, "));
+  Serial.print(ultimaHumedad, 1);
+  Serial.println(F(" %"));
+
+  // Trama de datos para el ESP32:
+  // Formato: DATA,tempDS18B20,tempDHT11,humedad,ventilador,error
+  Serial.print(F("DATA,"));
+  Serial.print(error ? INVALIDO : temperatura, 1);
+  Serial.print(',');
+  Serial.print(ultimaTempDHT, 1);
+  Serial.print(',');
+  Serial.print(ultimaHumedad, 1);
+  Serial.print(',');
+  Serial.print(ventiladorEncendido ? 1 : 0);
+  Serial.print(',');
+  Serial.println(error ? 1 : 0);
 }
 
-/**
- * Lee los sensores físicos y empaqueta en JSON para transmitir al ESP32 vía UART.
- * Se envían dos mensajes independientes (uno por cada zona física):
- * Zona 1 (PC 1 - DHT11) y Zona 2 (PC 2 - DS18B20).
- */
-void transmitirTelemetria() {
-    // --- LECTURA PC 1 (DHT11 - Zona 1) ---
-    float tempZona1 = dht.readTemperature();
-    if (isnan(tempZona1)) {
-        // En caso de fallo transitorio del DHT11, se reporta valor centinela seguro o último valor
-        tempZona1 = 25.0; 
+void actualizarServo(unsigned long ahora) {
+  if (ventiladorEncendido) {
+    if (ahora - tServo >= PASO_SERVO_MS) {
+      tServo = ahora;
+      angulo += paso;
+      if (angulo >= ANGULO_MAX) { angulo = ANGULO_MAX; paso = -1; }
+      else if (angulo <= ANGULO_MIN) { angulo = ANGULO_MIN; paso = 1; }
+      servo.write(angulo);
     }
-
-    // Serialización JSON para Zona 1
-    StaticJsonDocument<192> docZona1;
-    docZona1["msg_id"] = contadorMensajes++;
-    docZona1["zona"] = "zona1";
-    docZona1["temperatura"] = serialized(String(tempZona1, 2));
-    docZona1["origen"] = "real";
-    docZona1["sensor"] = "DHT11";
-    
-    String payloadZona1;
-    serializeJson(docZona1, payloadZona1);
-    Serial.println(payloadZona1);
-
-    // --- LECTURA PC 2 (DS18B20 - Zona 2) ---
-    ds18b20.requestTemperatures();
-    float tempZona2 = ds18b20.getTempCByIndex(0);
-    if (tempZona2 == DEVICE_DISCONNECTED_C || tempZona2 < -50.0) {
-        tempZona2 = 25.0; // Fallo de lectura del bus 1-wire
-    }
-
-    // Serialización JSON para Zona 2
-    StaticJsonDocument<192> docZona2;
-    docZona2["msg_id"] = contadorMensajes++;
-    docZona2["zona"] = "zona2";
-    docZona2["temperatura"] = serialized(String(tempZona2, 2));
-    docZona2["origen"] = "real";
-    docZona2["sensor"] = "DS18B20";
-
-    String payloadZona2;
-    serializeJson(docZona2, payloadZona2);
-    Serial.println(payloadZona2);
-}
-
-/**
- * Decodifica la orden JSON proveniente del ESP32 -> Backend Python.
- * Formato esperado:
- * {"zona_objetivo":"zona1","fan_state":1,"servo_angle":0,"timestamp_decision":1710000000.123}
- */
-void procesarComandoSerial(const String& jsonString) {
-    StaticJsonDocument<256> doc;
-    DeserializationError error = deserializeJson(doc, jsonString);
-
-    if (error) {
-        // No es un JSON válido, descartar
-        return;
-    }
-
-    // Validar que sea un comando de acción de control
-    if (!doc.containsKey("zona_objetivo") || !doc.containsKey("fan_state")) {
-        return;
-    }
-
-    const char* zonaObjetivo = doc["zona_objetivo"] | "desconocida";
-    int nuevoEstadoFan = doc["fan_state"] | 0;
-    int nuevoAnguloServo = doc["servo_angle"] | 90;
-    double timestampDecision = doc["timestamp_decision"] | 0.0;
-
-    // 1. Limitar ángulo a rango válido físico del SG90 (0° a 180°)
-    if (nuevoAnguloServo < 0) nuevoAnguloServo = 0;
-    if (nuevoAnguloServo > 180) nuevoAnguloServo = 180;
-
-    // 2. Mover servomotor si hay cambio de posición
-    if (nuevoAnguloServo != anguloServoActual) {
-        servomotor.write(nuevoAnguloServo);
-        anguloServoActual = nuevoAnguloServo;
-    }
-
-    // 3. Activar/Desactivar Driver MOSFET AOD4184A
-    estadoVentiladorActual = (nuevoEstadoFan > 0) ? HIGH : LOW;
-    digitalWrite(PIN_MOSFET_FAN, estadoVentiladorActual);
-
-    // 4. Retornar inmediatamente el mensaje JSON de ACK para cálculo de latencia
-    enviarACK(zonaObjetivo, (estadoVentiladorActual == HIGH ? 1 : 0), anguloServoActual, timestampDecision);
-}
-
-/**
- * Envía el mensaje de confirmación (ACK) por el puerto Serial.
- * El ESP32 retransmitirá este mensaje inmediatamente al broker MQTT bajo el tópico `lab/piloto/ack`.
- */
-void enviarACK(const char* zona, int fanState, int servoAngle, double timestampDecision) {
-    StaticJsonDocument<256> ackDoc;
-    ackDoc["tipo"] = "ack";
-    ackDoc["status"] = "OK";
-    ackDoc["zona_objetivo"] = zona;
-    ackDoc["fan_state"] = fanState;
-    ackDoc["servo_angle"] = servoAngle;
-    ackDoc["timestamp_decision"] = serialized(String(timestampDecision, 3));
-
-    String ackPayload;
-    serializeJson(ackDoc, ackPayload);
-    Serial.println(ackPayload);
+  } else if (angulo != ANGULO_REPOSO) {
+    angulo = ANGULO_REPOSO;
+    paso = 1;
+    servo.write(ANGULO_REPOSO);
+  }
 }

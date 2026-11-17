@@ -17,7 +17,10 @@ import {
 } from "lucide-react-native";
 import { AppSettings, EstadoActualResponse } from "../types/iot";
 import { ThemePalette } from "../styles/theme";
-import { testBackendHealthMobile } from "../services/api";
+import {
+  testBackendHealthMobile,
+  cambiarModoOperacionSistemaMobile,
+} from "../services/api";
 
 interface SettingsScreenProps {
   settings: AppSettings;
@@ -29,9 +32,9 @@ interface SettingsScreenProps {
 }
 
 const URL_PRESETS = [
+  { label: "Red Wi-Fi LAN (PC Host Actual)", url: "http://192.168.0.23:8000" },
+  { label: "Túnel Público (4G / Cualquier Red)", url: "https://quiet-pots-call.loca.lt" },
   { label: "Navegador web local", url: "http://localhost:8000" },
-  { label: "Red Wi-Fi LAN (PC Host)", url: "http://192.168.0.23:8000" },
-  { label: "Emulador Android AVD", url: "http://10.0.2.2:8000" },
 ];
 
 const INTERVALS = [2000, 3000, 5000, 10000];
@@ -165,6 +168,67 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
               Modo oscuro
             </Text>
           </TouchableOpacity>
+        </View>
+
+        <Text
+          style={[
+            styles.fieldLabel,
+            { color: theme.textSecondary, marginTop: 6 },
+          ]}
+        >
+          Modo de adquisición (Simulación / Híbrido / Hardware Real ESP32)
+        </Text>
+        <View style={styles.intervalRow}>
+          {(
+            [
+              { id: "simulacion", label: "Simulación" },
+              { id: "hibrido", label: "Híbrido" },
+              { id: "real", label: "Real (ESP32)" },
+            ] as const
+          ).map((m) => {
+            const modoSys =
+              estadoActual?.modo_operacion === "hardware_real"
+                ? "real"
+                : estadoActual?.modo_operacion || "simulacion";
+            const active = modoSys === m.id;
+            return (
+              <TouchableOpacity
+                key={m.id}
+                style={[
+                  styles.intervalBtn,
+                  {
+                    backgroundColor: active
+                      ? theme.accentPrimary
+                      : theme.bgSubCard,
+                    borderColor: active
+                      ? theme.accentPrimary
+                      : theme.borderCard,
+                  },
+                ]}
+                onPress={async () => {
+                  try {
+                    await cambiarModoOperacionSistemaMobile(
+                      settings.apiUrl,
+                      m.id
+                    );
+                    setTestResult(`Modo cambiado a: ${m.label}`);
+                  } catch {
+                    setTestResult("Error cambiando modo en el backend.");
+                  }
+                }}
+              >
+                <Text
+                  style={{
+                    color: active ? "#FFFFFF" : theme.textPrimary,
+                    fontSize: 11,
+                    fontWeight: "700",
+                  }}
+                >
+                  {m.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
         <Text

@@ -8,6 +8,7 @@ import paho.mqtt.client as mqtt
 from app.config import settings
 from app.database import db_manager
 from app.ml_model import ml_predictor
+from app.esp32_client import esp32_client
 
 logger = logging.getLogger("backend.mqtt")
 
@@ -43,7 +44,7 @@ class MQTTService:
     def __init__(self):
         self.cliente = None
         self._conectado = False
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # Estado operacional unificado del sistema de enfriamiento (Fuente única de verdad)
         self.estado_sistema: Dict[str, Any] = {
@@ -576,23 +577,107 @@ class MQTTService:
             "angulo_servo": 90
         }
 
+    def cambiar_modo_operacion_sistema(self, nuevo_modo: str) -> Dict[str, Any]:
+        """Cambia entre los 3 modos arquitectónicos: 'simulacion', 'real' e 'hibrido'"""
+        m = nuevo_modo.strip().lower()
+        if m == "hardware_real":
+            m = "real"
+        if m not in ("simulacion", "real", "hibrido"):
+            raise ValueError("El modo de operación debe ser 'simulacion', 'real' o 'hibrido'.")
+        with self._lock:
+            settings.OPERATION_MODE = m
+            self.estado_sistema["modo_operacion_sistema"] = m
+        logger.info(f"🌐 Modo de operación del sistema cambiado a: [{m.upper()}]")
+        return self.obtener_estado_actual()
+
+    def _construir_zonas_segun_modo(self) -> List[Dict[str, Any]]:
+        """
+        Ensambla las 5 zonas según el modo de operación activo ('simulacion', 'real' o 'hibrido'),
+        garantizando que en modo 'real' no se inventen temperaturas para equipos sin sensor
+        y que en modo 'hibrido' convivan 2 zonas físicas con 3 zonas simuladas claramente etiquetadas.
+        """
+        modo_op = self.estado_sistema.get("modo_operacion_sistema", settings.OPERATION_MODE)
+        if modo_op == "hardware_real":
+            modo_op = "real"
+
+        lecturas_hw = esp32_client.obtener_lecturas_para_zonas()
+        zonas_resultado: List[Dict[str, Any]] = []
+
+        for z_id in sorted(self.ultimas_temperaturas.keys()):
+            base_z = dict(self.ultimas_temperaturas[z_id])
+            meta = settings.ZONAS_METADATOS.get(z_id, {})
+
+            if modo_op == "simulacion":
+                base_z["origen"] = "virtual"
+                base_z["modo_simulacion"] = True
+                base_z["estado_telemetria"] = "SIMULADA" if base_z.get("disponible") else "SIN_SENAL"
+                zonas_resultado.append(base_z)
+
+            elif modo_op == "real":
+                if z_id in lecturas_hw:
+                    hw_z = dict(base_z)
+                    hw_z.update(lecturas_hw[z_id])
+                    zonas_resultado.append(hw_z)
+                else:
+                    zonas_resultado.append({
+                        "zona": z_id,
+                        "nombre": meta.get("nombre", z_id.upper()),
+                        "etiqueta": meta.get("etiqueta", z_id),
+                        "sensor": "Sin sensor físico instalado",
+                        "angulo_servo_zona": meta.get("angulo", 90),
+                        "temperatura_actual": None,
+                        "temperatura_predicha": None,
+                        "humedad": None,
+                        "origen": "sin_sensor",
+                        "modo_simulacion": False,
+                        "estado_ventilador": 1 if esp32_client.datos_crudos.get("ventilador") else 0,
+                        "angulo_servo": int(esp32_client.datos_crudos.get("angulo", 90)),
+                        "enfriando": False,
+                        "disponible": False,
+                        "estado_telemetria": "SIN_SENSOR_FISICO",
+                        "nivel_termico": "sin_senal",
+                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "edad_trama_s": -1
+                    })
+
+            elif modo_op == "hibrido":
+                if z_id in lecturas_hw:
+                    hw_z = dict(base_z)
+                    hw_z.update(lecturas_hw[z_id])
+                    zonas_resultado.append(hw_z)
+                else:
+                    base_z["origen"] = "virtual"
+                    base_z["modo_simulacion"] = True
+                    base_z["estado_telemetria"] = "SIMULADA" if base_z.get("disponible") else "SIN_SENAL"
+                    zonas_resultado.append(base_z)
+
+        return zonas_resultado
+
     def obtener_alertas_activas(self) -> List[Dict[str, Any]]:
-        """Genera la lista estructurada de alertas térmicas y de sensores en tiempo real"""
+        """Genera la lista estructurada de alertas térmicas y de sensores en tiempo real según el modo activo"""
         alertas: List[Dict[str, Any]] = []
         ahora_str = time.strftime("%H:%M:%S")
         with self._lock:
-            for z_id in sorted(self.ultimas_temperaturas.keys()):
-                info = self.ultimas_temperaturas[z_id]
+            zonas_evaluar = self._construir_zonas_segun_modo()
+            for info in zonas_evaluar:
+                z_id = info["zona"]
                 nombre = info.get("nombre", z_id.upper())
+                origen_lbl = "REAL" if info.get("origen") == "real" else "SIMULADA"
+
+                if info.get("origen") == "sin_sensor":
+                    continue
+
                 if not info.get("disponible") or info.get("temperatura_actual") is None:
+                    estado_tel = info.get("estado_telemetria", "SIN_SENAL")
                     alertas.append({
                         "id": f"alerta_sin_senal_{z_id}",
                         "zona": z_id,
                         "nombre_zona": nombre,
+                        "origen": info.get("origen", "virtual"),
                         "severidad": "error",
-                        "tipo": "FALLO_SENSOR",
-                        "titulo": f"{nombre}: Sensor Sin Señal",
-                        "mensaje": f"No se reciben paquetes de telemetría desde {info.get('sensor', 'el sensor')}. El sistema no inventa lecturas.",
+                        "tipo": estado_tel if estado_tel != "SIN_SENAL" else "FALLO_SENSOR",
+                        "titulo": f"{nombre} [{origen_lbl}]: {estado_tel.replace('_', ' ')}",
+                        "mensaje": f"No hay lectura válida actual desde {info.get('sensor', 'el sensor')}. El sistema no reemplaza datos con valores sintéticos.",
                         "temperatura_actual": None,
                         "temperatura_predicha": None,
                         "hora": ahora_str
@@ -607,10 +692,11 @@ class MQTTService:
                         "id": f"alerta_critica_{z_id}",
                         "zona": z_id,
                         "nombre_zona": nombre,
+                        "origen": info.get("origen", "virtual"),
                         "severidad": "critica",
                         "tipo": "SOBRECALENTAMIENTO_ACTUAL",
-                        "titulo": f"{nombre}: Umbral Crítico Superado ({t_act:.1f}°C)",
-                        "mensaje": f"Temperatura actual ({t_act:.1f}°C) >= 35.0°C. Refrigeración {'activa' if info.get('enfriando') else 'requerida'}.",
+                        "titulo": f"{nombre} [{origen_lbl}]: Umbral Crítico Superado ({t_act:.1f}°C)",
+                        "mensaje": f"Temperatura ({t_act:.1f}°C) >= 35.0°C ({origen_lbl}). Refrigeración {'activa' if info.get('enfriando') else 'requerida'}.",
                         "temperatura_actual": t_act,
                         "temperatura_predicha": t_pred,
                         "hora": ahora_str
@@ -620,9 +706,10 @@ class MQTTService:
                         "id": f"alerta_predictiva_{z_id}",
                         "zona": z_id,
                         "nombre_zona": nombre,
+                        "origen": info.get("origen", "virtual"),
                         "severidad": "advertencia",
                         "tipo": "PREDICCION_CRITICA_10M",
-                        "titulo": f"{nombre}: Alerta Predictiva a +10 min ({t_pred:.1f}°C)",
+                        "titulo": f"{nombre} [{origen_lbl}]: Alerta Predictiva a +10 min ({t_pred:.1f}°C)",
                         "mensaje": f"El modelo Scikit-Learn proyecta {t_pred:.1f}°C en 10 minutos (actual: {t_act:.1f}°C).",
                         "temperatura_actual": t_act,
                         "temperatura_predicha": t_pred,
@@ -633,10 +720,11 @@ class MQTTService:
                         "id": f"alerta_precaucion_{z_id}",
                         "zona": z_id,
                         "nombre_zona": nombre,
+                        "origen": info.get("origen", "virtual"),
                         "severidad": "advertencia",
                         "tipo": "PRECAUCION_TERMICA",
-                        "titulo": f"{nombre}: Temperatura Elevada ({t_act:.1f}°C)",
-                        "mensaje": f"Acercándose al umbral crítico de 35.0°C (proyección +10m: {t_pred:.1f}°C).",
+                        "titulo": f"{nombre} [{origen_lbl}]: Temperatura Elevada ({t_act:.1f}°C)",
+                        "mensaje": f"Acercándose al umbral crítico (proyección +10m: {t_pred:.1f}°C).",
                         "temperatura_actual": t_act,
                         "temperatura_predicha": t_pred,
                         "hora": ahora_str
@@ -646,14 +734,33 @@ class MQTTService:
     def obtener_estado_actual(self) -> Dict[str, Any]:
         with self._lock:
             self._verificar_disponibilidad_sensores()
-            self._actualizar_metricas_agregadas()
-            zonas_ordenadas = [
-                self.ultimas_temperaturas[k]
-                for k in sorted(self.ultimas_temperaturas.keys())
+            zonas_ordenadas = self._construir_zonas_segun_modo()
+
+            # Actualizar métricas agregadas sobre las zonas activas del modo seleccionado
+            zonas_validas = [
+                z for z in zonas_ordenadas
+                if z.get("disponible") and z.get("temperatura_actual") is not None
             ]
+            if zonas_validas:
+                temps_act = [float(z["temperatura_actual"]) for z in zonas_validas]
+                temps_pred = [float(z.get("temperatura_predicha") or z["temperatura_actual"]) for z in zonas_validas]
+                self.estado_sistema["temperatura_maxima_detectada"] = round(max(temps_act), 2)
+                self.estado_sistema["temperatura_maxima_predicha"] = round(max(temps_pred), 2)
+                self.estado_sistema["temperatura_promedio"] = round(sum(temps_act) / len(temps_act), 2)
+
+            estado_hw = esp32_client.obtener_estado()
+            sys_copy = dict(self.estado_sistema)
+            modo_op = sys_copy.get("modo_operacion_sistema", settings.OPERATION_MODE)
+            if modo_op in ("real", "hardware_real") and estado_hw["conectado"]:
+                sys_copy["estado_ventilador"] = 1 if estado_hw["datos_actuales"].get("ventilador") else 0
+                sys_copy["angulo_servo"] = int(estado_hw["datos_actuales"].get("angulo", 90))
+
+            sys_copy["hardware_esp32"] = estado_hw
+
             return {
-                "sistema": dict(self.estado_sistema),
+                "sistema": sys_copy,
                 "zonas": zonas_ordenadas,
+                "hardware_esp32": estado_hw,
                 "escenarios_disponibles": ESCENARIOS_CATALOGO,
                 "broker_conectado": self._conectado
             }

@@ -16,8 +16,19 @@ class Settings(BaseModel):
     MQTT_PASS: str = os.getenv("MQTT_PASS", "marck124M")
     CLIENT_ID: str = os.getenv("CLIENT_ID", "backend_fastapi_server_v2")
 
-    # Modo de Operación del Sistema: "simulacion" o "hardware_real"
+    # Modo de Operación del Sistema: "simulacion", "real" o "hibrido"
     OPERATION_MODE: str = os.getenv("OPERATION_MODE", "simulacion")
+
+    # Gateway ESP32 (Hardware Real HTTP)
+    ESP32_HOST: str = os.getenv("ESP32_HOST", "192.168.0.152")
+    ESP32_PORT: int = int(os.getenv("ESP32_PORT", "80"))
+    ESP32_URL: str = os.getenv("ESP32_URL", "http://192.168.0.152/datos")
+    ESP32_POLL_INTERVAL_S: float = float(os.getenv("ESP32_POLL_INTERVAL_S", "2.0"))
+    ESP32_TIMEOUT_S: float = float(os.getenv("ESP32_TIMEOUT_S", "2.5"))
+
+    # Mapeo físico de sensores a estaciones (configurable)
+    HW_MAPPING_DS18B20: str = os.getenv("HW_MAPPING_DS18B20", "zona2")  # Por defecto PC 2
+    HW_MAPPING_DHT11: str = os.getenv("HW_MAPPING_DHT11", "zona1")      # Por defecto PC 1
 
     # Tópicos MQTT
     TOPIC_SENSORES: str = "lab/piloto/+/temp"
