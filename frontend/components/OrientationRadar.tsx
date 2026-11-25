@@ -98,7 +98,7 @@ export function OrientationRadar({
         />
 
         {/* Nodos de estaciones PC 1 a PC 5 */}
-        {RADAR_TARGETS.map((pt) => {
+        {RADAR_TARGETS.filter((pt) => estadoActual?.zonas[pt.zona]?.origen === "virtual").map((pt) => {
           const isTarget = Math.abs(anguloServo - pt.angulo) <= 15;
           const zInfo = estadoActual?.zonas?.[pt.zona];
           const temp = zInfo?.temperatura ?? 0;

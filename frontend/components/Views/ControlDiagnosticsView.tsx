@@ -13,6 +13,7 @@ import {
   ModoControl,
 } from "../../types/iot";
 import { OrientationRadar, RADAR_TARGETS } from "../OrientationRadar";
+import { ControlFisicoNano } from "../ControlFisicoNano";
 
 interface ControlDiagnosticsViewProps {
   estadoActual: EstadoActualResponse | null;
@@ -32,6 +33,7 @@ interface ControlDiagnosticsViewProps {
   onEnviarControlManual: (zona?: string, angulo?: number, fan?: boolean) => void;
   onCambiarEscenario: (escenario: EscenarioSimulacion) => void;
   onReiniciarSimulacion: () => void;
+  onActualizar: () => void;
 }
 
 const ESCENARIOS: {
@@ -62,7 +64,7 @@ const ESCENARIOS: {
   {
     id: "fallo_sensor",
     titulo: "Fallo de sensor",
-    desc: "Simula pérdida de señal en PC 2",
+    desc: "Simula pérdida de señal en una zona virtual",
   },
 ];
 
@@ -84,6 +86,7 @@ export function ControlDiagnosticsView({
   onEnviarControlManual,
   onCambiarEscenario,
   onReiniciarSimulacion,
+  onActualizar,
 }: ControlDiagnosticsViewProps) {
   const modoControl: ModoControl = estadoActual?.modo_control || "autonomo";
   const escenarioActual: EscenarioSimulacion =
@@ -98,6 +101,7 @@ export function ControlDiagnosticsView({
       ? "real"
       : estadoActual?.modo_operacion || "simulacion";
   const hwEsp32 = estadoActual?.hardware_esp32;
+  const tramaVigente = hwEsp32?.conectado && hwEsp32.edad_trama_s >= 0 && hwEsp32.edad_trama_s <= 15;
 
   return (
     <div className="space-y-5">
@@ -116,10 +120,9 @@ export function ControlDiagnosticsView({
                 Estado del Control Físico (Arduino Nano + ESP32)
               </h3>
               <p className="text-xs mt-1 leading-relaxed">
-                El hardware actual opera con enlace unidireccional (<strong>Nano TX D1 → ESP32 RX GPIO16</strong>).
-                El ventilador MOSFET (D4) y el servomotor SG90 (D5) son gobernados autónomamente por el Arduino Nano
-                (encendido ≥ 30.0 °C o ante fallo de DS18B20; apagado ≤ 29.0 °C). Los controles manuales inferiores
-                aplican al simulador salvo que se instale el enlace bidireccional de Fase 3 (<strong>ESP32 TX GPIO17 → Nano RX D0</strong>).
+                Cada sensor solicita aire a 30 °C y deja de solicitarlo a 29 °C. El Nano apaga el ventilador
+                cuando ninguna zona lo necesita y alterna la paleta cada 20 s si ambas lo solicitan.
+                Un fallo de lectura activa ventilación de protección. El ESP32 transmite el estado del montaje por Wi-Fi.
               </p>
             </div>
             <div className="shrink-0 text-right font-mono text-xs">
@@ -127,8 +130,8 @@ export function ControlDiagnosticsView({
                 ESP32: {hwEsp32?.estado_enlace || "DESCONECTADO"}
               </span>
               <span className="opacity-80">
-                Fan Físico:{" "}
-                {hwEsp32?.conectado
+                Ventilador físico:{" "}
+                {tramaVigente
                   ? hwEsp32.datos_actuales?.ventilador
                     ? "ON (Activo)"
                     : "OFF (Espera)"
@@ -138,6 +141,15 @@ export function ControlDiagnosticsView({
           </div>
         </div>
       )}
+      {(modoSys === "real" || modoSys === "hibrido") && (
+        <ControlFisicoNano
+          telemetria={hwEsp32?.control_usb?.telemetria ?? null}
+          cardClass={cardClass}
+          alConfirmar={onActualizar}
+        />
+      )}
+      {modoSys !== "real" && (
+      <>
       {/* 1. Estado del sistema (barra operacional compacta) */}
       <div
         className={`${cardClass} rounded-xl p-4 grid grid-cols-2 sm:grid-cols-4 gap-4`}
@@ -163,10 +175,10 @@ export function ControlDiagnosticsView({
 
         <div>
           <span className={`text-xs block ${textSecondary}`}>
-            Modo de operación
+            Modo del simulador
           </span>
           <span className={`text-sm font-semibold mt-0.5 block ${textPrimary}`}>
-            {modoControl === "manual" ? "Manual" : "Automático (IA)"}
+            {modoControl === "manual" ? "Manual" : "Automático predictivo"}
           </span>
         </div>
 
@@ -293,7 +305,7 @@ export function ControlDiagnosticsView({
             </div>
 
             <div className="grid grid-cols-5 gap-2 mb-3">
-              {RADAR_TARGETS.map((t) => {
+              {RADAR_TARGETS.filter((t) => estadoActual?.zonas[t.zona]?.origen === "virtual").map((t) => {
                 const selected = controlZona === t.zona;
                 return (
                   <button
@@ -408,7 +420,7 @@ export function ControlDiagnosticsView({
               Escenarios de simulación
             </h2>
             <p className={`text-xs ${textSecondary}`}>
-              Selecciona el comportamiento térmico de las 5 computadoras virtuales
+              Selecciona el comportamiento térmico de las estaciones simuladas
             </p>
           </div>
 
@@ -534,6 +546,8 @@ export function ControlDiagnosticsView({
           </table>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }

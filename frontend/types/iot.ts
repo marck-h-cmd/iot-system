@@ -9,7 +9,26 @@ export type ModoControl = "autonomo" | "manual";
 
 export type ModoOperacionSistema = "simulacion" | "real" | "hibrido";
 
+export interface TelemetriaNano {
+  ventilador: boolean;
+  angulo: number;
+  direccion: 0 | 1 | 2;
+  manual: boolean;
+  proteccion: boolean;
+  servo_activo: boolean;
+}
+
+export interface ConfirmacionNano {
+  id: string;
+  ventilador: boolean;
+  angulo_objetivo: number;
+  manual: boolean;
+  proteccion: boolean;
+  servo_activo: boolean;
+}
+
 export interface HardwareESP32Estado {
+  control_usb?: { disponible: boolean; telemetria: TelemetriaNano | null };
   esp32_url: string;
   poll_interval_s: number;
   timeout_s: number;
@@ -35,14 +54,15 @@ export interface HardwareESP32Estado {
     error: boolean;
     edad: number;
     angulo?: number;
+    direccion?: "ds18b20" | "dht11" | "reposo" | null;
     modo_hardware?: string;
   };
 }
 
 export interface ZonaEstado {
-  temperatura: number;
-  humedad: number;
-  prediccion_10m: number;
+  temperatura: number | null;
+  humedad: number | null;
+  prediccion_10m: number | null;
   tendencia_por_minuto?: number;
   alerta_preventiva?: boolean;
   probabilidad_sobrecalentamiento?: number;
@@ -97,7 +117,7 @@ export interface AlertaActiva {
   tipo: string;
   mensaje: string;
   temperatura: number | null;
-  prediccion_10m?: number;
+  prediccion_10m?: number | null;
   timestamp: string;
   modo_operacion: string;
 }
@@ -117,13 +137,28 @@ export interface IndicadoresResponse {
   latencia_red_promedio_ms: number | null;
   acks_confirmados: number;
   tasa_confirmacion_ack_pct: number | null;
-  ahorro_energetico_estimado_pct: number;
-  consumo_inteligente_wh: number;
-  consumo_continuo_base_wh: number;
   precision_modelo_r2: number | null;
   error_absoluto_medio_mae: number | null;
   rmse_modelo: number | null;
   muestras_ml: number;
+}
+
+export interface EvaluacionModelo {
+  origen: "real" | "virtual";
+  mae: number | null;
+  rmse: number | null;
+  r2: number | null;
+  muestras_evaluadas: number;
+}
+
+export interface EvidenciaHistorica {
+  hardware: {
+    lecturas: number;
+    zonas: { zona: string; sensor: string; lecturas: number; minima: number; maxima: number }[];
+    transiciones: { zona: string; antes: number; inicio: number; posterior: number | null; minutos_hasta_posterior: number | null }[];
+  };
+  simulacion: { eventos: number; por_modo: Record<string, number>; latencia_mediana_ms: number | null };
+  pares: { total: number; inicios_coincidentes: number; caida_declarada_media_c: number | null };
 }
 
 export type EstadoMetaIndicador =

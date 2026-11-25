@@ -39,7 +39,7 @@ services:
       dockerfile: Dockerfile
     restart: always
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       - DB_HOST=mysql
       - DB_PORT=3306
@@ -50,7 +50,14 @@ services:
       - MQTT_PORT=1883
       - MQTT_USER=sensor_iot
       - MQTT_PASS=marck124M
-      - OPERATION_MODE=simulacion
+      - OPERATION_MODE=${OPERATION_MODE:-simulacion}
+      - ESP32_URL=${ESP32_URL:-http://192.168.0.152/datos}
+      - NANO_BRIDGE_TOKEN=${NANO_BRIDGE_TOKEN:-}
+      - EVIDENCIA_CSV_DIR=/app/evidencia
+    volumes:
+      - ./datos_hardware_real.csv:/app/evidencia/datos_hardware_real.csv:ro
+      - ./eventos_enfriamiento_antes_despues.csv:/app/evidencia/eventos_enfriamiento_antes_despues.csv:ro
+      - ./analisis_reduccion_termica_antes_despues.csv:/app/evidencia/analisis_reduccion_termica_antes_despues.csv:ro
     depends_on:
       - emqx
       - mysql
@@ -98,7 +105,7 @@ services:
       dockerfile: Dockerfile
     restart: always
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - BACKEND_INTERNAL_URL=http://backend:8000/api/:path*
     depends_on:

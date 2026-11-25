@@ -2,6 +2,9 @@ import {
   AlertaActiva,
   DimensionIndicador,
   EscenarioSimulacion,
+  ConfirmacionNano,
+  EvaluacionModelo,
+  EvidenciaHistorica,
   EstadoActualResponse,
   EstadoMetaIndicador,
   EventoControl,
@@ -15,8 +18,7 @@ import {
 
 export function getApiBaseUrl(): string {
   if (typeof window !== "undefined") {
-    const hostname = window.location.hostname || "localhost";
-    return `http://${hostname}:8000`;
+    return "";
   }
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 }
@@ -174,22 +176,18 @@ export function evaluarMetaIndicador(
 
 function normalizeEstadoActual(
   rawControlEstado: any,
-  rawTelemetriaList: any[],
-  rawIndicadores: any,
   rawAlertas: any[]
 ): EstadoActualResponse {
   const sys = rawControlEstado?.sistema || {};
   const zonasArr: any[] = Array.isArray(rawControlEstado?.zonas)
     ? rawControlEstado.zonas
-    : Array.isArray(rawTelemetriaList)
-    ? rawTelemetriaList
     : [];
 
   const zonasMap: Record<string, ZonaEstado> = {};
   for (const z of zonasArr) {
     const zId = z.zona || "zona1";
-    const tAct = z.temperatura_actual != null ? Number(z.temperatura_actual) : 25.0;
-    const tPred = z.temperatura_predicha != null ? Number(z.temperatura_predicha) : tAct;
+    const tAct = z.temperatura_actual != null ? Number(z.temperatura_actual) : null;
+    const tPred = z.temperatura_predicha != null ? Number(z.temperatura_predicha) : null;
     const orig = (z.origen || "virtual") as "real" | "virtual" | "sin_sensor";
     const origLabel =
       orig === "real"
@@ -199,9 +197,9 @@ function normalizeEstadoActual(
         : "SIMULADA";
     zonasMap[zId] = {
       temperatura: tAct,
-      humedad: z.humedad != null ? Number(z.humedad) : 52.0,
+      humedad: z.humedad != null ? Number(z.humedad) : null,
       prediccion_10m: tPred,
-      alerta_preventiva: z.temperatura_actual != null && tPred >= 35.0,
+      alerta_preventiva: tPred != null && tPred >= 35.0,
       angulo_servo: z.angulo_servo_zona ?? z.angulo_servo ?? 0,
       nombre: z.nombre || zId.toUpperCase(),
       sensor: z.sensor || "Sonda Virtual (Simulado)",
@@ -218,7 +216,6 @@ function normalizeEstadoActual(
     };
   }
 
-  const dim2 = rawIndicadores?.dimension_2 || {};
   const hwEsp32 = rawControlEstado?.hardware_esp32 || sys.hardware_esp32 || undefined;
   return {
     modo_operacion: sys.modo_operacion_sistema || "simulacion",
@@ -229,20 +226,20 @@ function normalizeEstadoActual(
     ultimo_angulo_servo: Number(sys.angulo_servo ?? 90),
     zona_objetivo_actual: sys.zona_activa || "zona3",
     ultima_accion: sys.ultimo_estado_comando || "EN_ESPERA",
-    mqtt_conectado: Boolean(rawControlEstado?.broker_conectado ?? true),
+    mqtt_conectado: Boolean(rawControlEstado?.broker_conectado),
     mensajes_procesados: Number(sys.total_mensajes_recibidos ?? 0),
-    comandos_enviados: Number(rawIndicadores?.dimension_3?.total_eventos ?? 0),
+    comandos_enviados: Number(sys.total_comandos_enviados ?? 0),
     acks_recibidos: Number(sys.total_acks_recibidos ?? 0),
     latencia_ultima_ms:
       sys.ultima_latencia_ms != null
         ? Number(sys.ultima_latencia_ms)
-        : rawIndicadores?.dimension_3?.latencia_promedio_ms ?? null,
+        : null,
     hardware_esp32: hwEsp32,
     metricas_ml: {
-      r2_score: dim2.r2 ?? null,
-      mae: dim2.mae ?? null,
-      rmse: dim2.rmse ?? null,
-      muestras_evaluadas: Number(dim2.muestras ?? 0),
+      r2_score: null,
+      mae: null,
+      rmse: null,
+      muestras_evaluadas: 0,
     },
     alertas_activas: rawAlertas,
   };
@@ -254,7 +251,6 @@ function normalizeIndicadores(rawInd: any): IndicadoresResponse {
   const d3 = rawInd?.dimension_3 || {};
   const d4 = rawInd?.dimension_4 || {};
   const est = rawInd?.estado_actual || {};
-  const duty = Number(d4.fraccion_tiempo_fan_pct ?? 20.0);
 
   return {
     modo_operacion: "simulacion",
@@ -272,9 +268,6 @@ function normalizeIndicadores(rawInd: any): IndicadoresResponse {
     latencia_red_promedio_ms: d3.latencia_promedio_ms ?? null,
     acks_confirmados: Number(est.total_acks_recibidos ?? 0),
     tasa_confirmacion_ack_pct: d3.tasa_ack_pct ?? null,
-    ahorro_energetico_estimado_pct: Math.max(0, Number((100 - duty).toFixed(1))),
-    consumo_inteligente_wh: Number(((duty / 100) * 1.5).toFixed(2)),
-    consumo_continuo_base_wh: 7.5,
     precision_modelo_r2: d2.r2 ?? null,
     error_absoluto_medio_mae: d2.mae ?? null,
     rmse_modelo: d2.rmse ?? null,
@@ -436,40 +429,29 @@ function normalizeEstadisticas(rawStat: any): PruebasEstadisticasResponse {
   };
 }
 
-export async function fetchDashboardBundle() {
-  const baseUrl = getApiBaseUrl();
-  const [
-    resControlEstado,
-    resActual,
-    resHist,
-    resInd,
-    resIndDet,
-    resStat,
-    resEv,
-    resAlertas,
-  ] = await Promise.all([
-    fetch(`${baseUrl}/api/control/estado`, { cache: "no-store" }),
-    fetch(`${baseUrl}/api/telemetria/actual`, { cache: "no-store" }),
-    fetch(`${baseUrl}/api/telemetria/historial?limit=100`, { cache: "no-store" }),
-    fetch(`${baseUrl}/api/indicadores`, { cache: "no-store" }),
-    fetch(`${baseUrl}/api/indicadores/detallado`, { cache: "no-store" }),
-    fetch(`${baseUrl}/api/estadisticas/pruebas`, { cache: "no-store" }),
-    fetch(`${baseUrl}/api/control/eventos?limit=30`, { cache: "no-store" }),
-    fetch(`${baseUrl}/api/alertas`, { cache: "no-store" }),
+async function getJson<T = any>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, { cache: "no-store", signal });
+  if (!response.ok) throw new Error(`Error de API (${response.status})`);
+  return response.json();
+}
+
+function normalizeHistorial(filas: any[]) {
+  return filas.map((h) => ({
+    ...h,
+    temperatura: Number(h.temperatura_actual),
+    prediccion_10m: h.temperatura_predicha == null ? null : Number(h.temperatura_predicha),
+    fecha_registro: Number(h.timestamp_origen) > 0 ? Number(h.timestamp_origen) * 1000 : h.timestamp,
+  }));
+}
+
+export async function fetchDashboardBundle(signal?: AbortSignal) {
+  const [rawControlEstado, real, virtual, rawEv, rawAlertasJson] = await Promise.all([
+    getJson("/api/control/estado", signal),
+    getJson("/api/telemetria/historial?limit=100&origen=real", signal),
+    getJson("/api/telemetria/historial?limit=150&origen=virtual", signal),
+    getJson("/api/control/eventos?limit=30", signal),
+    getJson("/api/alertas", signal),
   ]);
-
-  if (!resControlEstado.ok && !resActual.ok) {
-    throw new Error("Error conectando con FastAPI");
-  }
-
-  const rawControlEstado = resControlEstado.ok ? await resControlEstado.json() : {};
-  const rawActual = resActual.ok ? await resActual.json() : [];
-  const rawHist = resHist.ok ? await resHist.json() : { datos: [] };
-  const rawInd = resInd.ok ? await resInd.json() : {};
-  const rawIndDet = resIndDet.ok ? await resIndDet.json() : {};
-  const rawStat = resStat.ok ? await resStat.json() : {};
-  const rawEv = resEv.ok ? await resEv.json() : [];
-  const rawAlertasJson = resAlertas.ok ? await resAlertas.json() : { alertas: [] };
 
   const alertasNorm: AlertaActiva[] = (rawAlertasJson.alertas || []).map((a: any) => ({
     id: a.id,
@@ -486,28 +468,11 @@ export async function fetchDashboardBundle() {
     temperatura: a.temperatura_actual ?? null,
     prediccion_10m: a.temperatura_predicha ?? null,
     timestamp: a.hora || "",
-    modo_operacion: "simulacion",
+    modo_operacion: a.origen === "real" ? "real" : "simulacion",
   }));
 
-  const estadoActual = normalizeEstadoActual(
-    rawControlEstado,
-    rawActual,
-    rawInd,
-    alertasNorm
-  );
-  const indicadores = normalizeIndicadores(rawInd);
-  const indicadoresDetallados = normalizeIndicadoresDetallados(
-    rawIndDet,
-    indicadores
-  );
-  const pruebasEstadisticas = normalizeEstadisticas(rawStat);
-
-  const historialNorm = (rawHist.datos || []).map((h: any) => ({
-    ...h,
-    temperatura: Number(h.temperatura_actual ?? h.temperatura ?? 25.0),
-    prediccion_10m: Number(h.temperatura_predicha ?? h.prediccion_10m ?? 25.0),
-    fecha_registro: h.timestamp || h.fecha_registro,
-  }));
+  const estadoActual = normalizeEstadoActual(rawControlEstado, alertasNorm);
+  const historialNorm = normalizeHistorial([...real.datos, ...virtual.datos]);
 
   const evArray = Array.isArray(rawEv) ? rawEv : rawEv.eventos || [];
   const eventosNorm: EventoControl[] = evArray.map((e: any) => ({
@@ -518,8 +483,7 @@ export async function fetchDashboardBundle() {
     estado_ventilador: Number(e.fan_state ?? e.estado_ventilador ?? 0) === 1,
     motivo: e.modo_operacion === "manual" ? "Manual" : "Automático",
     temperatura_disparo: Number(e.temperatura_disparo ?? 32.0),
-    temperatura_posterior:
-      e.temperatura_predicha != null ? Number(e.temperatura_predicha) : null,
+    temperatura_posterior: null,
     reduccion_c: null,
     latencia_ms: e.latencia_ms != null ? Number(e.latencia_ms) : null,
     confirmado_ack: Number(e.ack_recibido ?? e.confirmado_ack ?? 0) === 1,
@@ -528,18 +492,34 @@ export async function fetchDashboardBundle() {
       e.estado_comando ||
       (Number(e.ack_recibido) === 1 ? "EJECUTADO_SIMULACION" : "PENDIENTE"),
     origen_ejecucion: e.origen_ejecucion || "simulacion",
-    fecha_evento: e.timestamp || "",
+    fecha_evento: e.created_at || e.timestamp || "",
   }));
 
   return {
     estadoActual,
     historial: historialNorm,
-    indicadores,
-    indicadoresDetallados,
-    pruebasEstadisticas,
     eventos: eventosNorm,
     alertas: alertasNorm,
   };
+}
+
+export async function fetchIndicadores(signal?: AbortSignal) {
+  const [raw, detalle, real, virtual] = await Promise.all([
+    getJson("/api/indicadores", signal),
+    getJson("/api/indicadores/detallado", signal),
+    getJson<EvaluacionModelo>("/api/metricas?origen=real", signal),
+    getJson<EvaluacionModelo>("/api/metricas?origen=virtual", signal),
+  ]);
+  const indicadores = normalizeIndicadores(raw);
+  return { indicadores, detalle: normalizeIndicadoresDetallados(detalle, indicadores), modelos: [real, virtual] };
+}
+
+export async function fetchEstadisticas(signal?: AbortSignal) {
+  const [pruebas, evidencia] = await Promise.all([
+    getJson("/api/estadisticas/pruebas", signal),
+    getJson<EvidenciaHistorica>("/api/estadisticas/evidencia", signal),
+  ]);
+  return { pruebas: normalizeEstadisticas(pruebas), evidencia };
 }
 
 export async function cambiarModoControlApi(modo: ModoControl) {
@@ -551,6 +531,19 @@ export async function cambiarModoControlApi(modo: ModoControl) {
   });
   if (!res.ok) throw new Error("Error al cambiar modo de control");
   return res.json();
+}
+
+export async function enviarOrdenNano(
+  orden: { modo: "autonomo" | "pausa" } | { modo: "manual"; ventilador: boolean; angulo: number }
+): Promise<ConfirmacionNano> {
+  const res = await fetch(`${getApiBaseUrl()}/api/hardware/actuacion`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(orden),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Orden física rechazada.");
+  return body;
 }
 
 export async function enviarComandoManualApi(payload: {
@@ -638,15 +631,7 @@ export async function fetchDetalleZonaApi(zonaId: string, limite = 40) {
   const data = await res.json();
   return {
     ...data,
-    historial: (data.historial || []).map((h: any) => ({
-      ...h,
-      temperatura: Number(h.temperatura_actual ?? h.temperatura ?? 25.0),
-      prediccion_10m: Number(
-        h.temperatura_predicha ?? h.prediccion_10m ?? 25.0
-      ),
-      humedad: 52.0,
-      fecha_registro: h.timestamp || h.fecha_registro,
-    })),
+    historial: normalizeHistorial(data.historial || []),
     eventos_recientes: (data.eventos_recientes || []).map((e: any) => ({
       ...e,
       angulo_servo: Number(e.servo_angle ?? e.angulo_servo ?? 90),

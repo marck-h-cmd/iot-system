@@ -17,6 +17,8 @@ import {
   AlertaActiva,
   EscenarioSimulacion,
   EstadoActualResponse,
+  EvaluacionModelo,
+  EvidenciaHistorica,
   EventoControl,
   IndicadoresDetalladosResponse,
   IndicadoresResponse,
@@ -29,6 +31,8 @@ import {
   cambiarModoOperacionSistemaApi,
   enviarComandoManualApi,
   fetchDashboardBundle,
+  fetchEstadisticas,
+  fetchIndicadores,
   reiniciarSimulacionApi,
 } from "../services/api";
 import { BrandLogo } from "../components/BrandLogo";
@@ -66,6 +70,9 @@ export default function SmartCoolingDashboard() {
     useState<IndicadoresDetalladosResponse | null>(null);
   const [pruebasEstadisticas, setPruebasEstadisticas] =
     useState<PruebasEstadisticasResponse | null>(null);
+  const [evaluacionesModelo, setEvaluacionesModelo] = useState<EvaluacionModelo[]>([]);
+  const [evidencia, setEvidencia] = useState<EvidenciaHistorica | null>(null);
+  const [errorInvestigacion, setErrorInvestigacion] = useState(false);
   const [eventos, setEventos] = useState<EventoControl[]>([]);
   const [alertas, setAlertas] = useState<AlertaActiva[]>([]);
   const [zonaSeleccionadaChart, setZonaSeleccionadaChart] =
@@ -76,22 +83,17 @@ export default function SmartCoolingDashboard() {
     useState<string>("");
 
   // Estado del panel de control manual
-  const [controlZona, setControlZona] = useState<string>("zona1");
-  const [controlAngulo, setControlAngulo] = useState<number>(0);
+  const [controlZona, setControlZona] = useState<string>("zona3");
+  const [controlAngulo, setControlAngulo] = useState<number>(90);
   const [controlFan, setControlFan] = useState<boolean>(true);
   const [enviandoControl, setEnviandoControl] = useState<boolean>(false);
   const [feedbackControl, setFeedbackControl] = useState<string | null>(null);
 
-  const cargarDatos = async () => {
+  const cargarDatos = async (signal?: AbortSignal) => {
     try {
-      const bundle = await fetchDashboardBundle();
+      const bundle = await fetchDashboardBundle(signal);
       setEstadoActual(bundle.estadoActual);
       setHistorial(bundle.historial);
-      if (bundle.indicadores) setIndicadores(bundle.indicadores);
-      if (bundle.indicadoresDetallados)
-        setIndicadoresDetallados(bundle.indicadoresDetallados);
-      if (bundle.pruebasEstadisticas)
-        setPruebasEstadisticas(bundle.pruebasEstadisticas);
       setEventos(bundle.eventos);
       setAlertas(bundle.alertas);
       setErrorConexion(false);
@@ -103,15 +105,72 @@ export default function SmartCoolingDashboard() {
         })
       );
     } catch {
-      setErrorConexion(true);
+      if (!signal?.aborted) setErrorConexion(true);
     }
   };
 
   useEffect(() => {
-    cargarDatos();
-    const interval = setInterval(cargarDatos, 3000);
-    return () => clearInterval(interval);
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    async function actualizar() {
+      await cargarDatos(controller.signal);
+      if (!controller.signal.aborted) timer = setTimeout(actualizar, 3000);
+    }
+    void actualizar();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== "indicadores" && activeTab !== "estadisticas") return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    setErrorInvestigacion(false);
+    async function actualizar() {
+      try {
+        if (activeTab === "indicadores") {
+          const datos = await fetchIndicadores(controller.signal);
+          setIndicadores(datos.indicadores);
+          setIndicadoresDetallados(datos.detalle);
+          setEvaluacionesModelo(datos.modelos);
+        } else {
+          const datos = await fetchEstadisticas(controller.signal);
+          setPruebasEstadisticas(datos.pruebas);
+          setEvidencia(datos.evidencia);
+        }
+        setErrorInvestigacion(false);
+      } catch {
+        if (!controller.signal.aborted) setErrorInvestigacion(true);
+      } finally {
+        if (!controller.signal.aborted) timer = setTimeout(actualizar, 15000);
+      }
+    }
+    void actualizar();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!estadoActual) return;
+    const zonas = Object.entries(estadoActual.zonas);
+    const seleccionada = estadoActual.zonas[zonaSeleccionadaChart];
+    if (seleccionada?.origen === "sin_sensor") {
+      const primera = zonas.find(([, zona]) => zona.origen === "real");
+      if (primera) setZonaSeleccionadaChart(primera[0]);
+    }
+    const esSimulada = estadoActual.zonas[controlZona]?.origen === "virtual";
+    if (!esSimulada) {
+      const primera = zonas.find(([, zona]) => zona.origen === "virtual");
+      if (primera) {
+        setControlZona(primera[0]);
+        setControlAngulo(primera[1].angulo_servo);
+      }
+    }
+  }, [estadoActual, controlZona, zonaSeleccionadaChart]);
 
   useEffect(() => {
     if (typeof document !== "undefined") {
@@ -154,6 +213,7 @@ export default function SmartCoolingDashboard() {
     fanOverride?: boolean
   ) => {
     const zTarget = zonaOverride ?? controlZona;
+    if (estadoActual?.zonas[zTarget]?.origen !== "virtual") return;
     const angTarget = anguloOverride ?? controlAngulo;
     const fanTarget = fanOverride ?? controlFan;
 
@@ -215,10 +275,10 @@ export default function SmartCoolingDashboard() {
   };
 
   const chartHistory = useMemo(() => {
+    const origen = estadoActual?.zonas[zonaSeleccionadaChart]?.origen;
     return historial
-      .filter((item) => item.zona === zonaSeleccionadaChart)
-      .slice(0, 26)
-      .reverse()
+      .filter((item) => item.zona === zonaSeleccionadaChart && item.origen === origen)
+      .slice(-26)
       .map((item) => ({
         hora: item.fecha_registro
           ? new Date(item.fecha_registro).toLocaleTimeString([], {
@@ -228,10 +288,10 @@ export default function SmartCoolingDashboard() {
             })
           : "",
         temperatura: Number(item.temperatura),
-        prediccion: Number(item.prediccion_10m || item.temperatura),
+        prediccion: item.prediccion_10m,
         umbral: 35.0,
       }));
-  }, [historial, zonaSeleccionadaChart]);
+  }, [historial, zonaSeleccionadaChart, estadoActual]);
 
   const cardClass = darkMode ? "surface-card-dark" : "surface-card-light";
   const subCardClass = darkMode
@@ -247,7 +307,7 @@ export default function SmartCoolingDashboard() {
 
   const modoControlActual: ModoControl =
     estadoActual?.modo_control || "autonomo";
-  const online = !errorConexion && Boolean(estadoActual?.mqtt_conectado);
+  const online = !errorConexion && estadoActual !== null;
 
   return (
     <div
@@ -434,6 +494,7 @@ export default function SmartCoolingDashboard() {
             </div>
 
             {/* Selector rápido Manual / Automático */}
+            {!["real", "hardware_real"].includes(estadoActual?.modo_operacion ?? "") && (
             <button
               onClick={() =>
                 handleCambiarModoControl(
@@ -445,13 +506,14 @@ export default function SmartCoolingDashboard() {
                   ? "bg-[#111C2E] border-slate-700 text-slate-200 hover:bg-slate-800"
                   : "bg-slate-100 border-slate-200 text-slate-800 hover:bg-slate-200"
               }`}
-              title="Alternar modo de control"
+              title="Alternar modo del simulador"
             >
-              Modo: {modoControlActual === "manual" ? "Manual" : "Automático"}
+              Simulador: {modoControlActual === "manual" ? "Manual" : "Automático"}
             </button>
+            )}
 
             <button
-              onClick={cargarDatos}
+              onClick={() => void cargarDatos()}
               className={`p-1.5 rounded-lg border transition-colors ${
                 darkMode
                   ? "bg-[#111C2E] border-slate-700 hover:bg-slate-800 text-slate-300"
@@ -541,7 +603,6 @@ export default function SmartCoolingDashboard() {
           {activeTab === "monitoreo" && (
             <LiveMonitoringView
               estadoActual={estadoActual}
-              indicadores={indicadores}
               eventos={eventos}
               alertas={alertas}
               chartHistory={chartHistory}
@@ -551,14 +612,12 @@ export default function SmartCoolingDashboard() {
               cardClass={cardClass}
               subCardClass={subCardClass}
               onSelectZonaModal={(zId) => setZonaModalId(zId)}
-              onQuickCoolZona={(zId, angulo, fanOn) =>
-                handleEnviarControlManual(zId, angulo, fanOn)
-              }
             />
           )}
 
           {activeTab === "indicadores" && (
             <IndicatorsView
+              modelos={evaluacionesModelo}
               indicadores={indicadores}
               indicadoresDetallados={indicadoresDetallados}
               darkMode={darkMode}
@@ -569,11 +628,16 @@ export default function SmartCoolingDashboard() {
 
           {activeTab === "estadisticas" && (
             <StatisticsView
+              evidencia={evidencia}
               pruebasEstadisticas={pruebasEstadisticas}
               darkMode={darkMode}
               cardClass={cardClass}
               subCardClass={subCardClass}
             />
+          )}
+
+          {errorInvestigacion && (activeTab === "indicadores" || activeTab === "estadisticas") && (
+            <p role="alert" className="mt-4 text-sm text-amber-500">No se pudieron actualizar los resultados de investigación.</p>
           )}
 
           {activeTab === "control" && (
@@ -595,6 +659,7 @@ export default function SmartCoolingDashboard() {
               onEnviarControlManual={handleEnviarControlManual}
               onCambiarEscenario={handleCambiarEscenario}
               onReiniciarSimulacion={handleReiniciarSimulacion}
+              onActualizar={() => void cargarDatos()}
             />
           )}
         </main>

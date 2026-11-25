@@ -56,7 +56,7 @@ class MQTTService:
             "angulo_servo": 90,
             "zona_activa": "zona3",
             "temperatura_maxima_detectada": 31.0,
-            "temperatura_maxima_predicha": 31.8,
+            "temperatura_maxima_predicha": None,
             "temperatura_promedio": 30.8,
             "ultimo_cambio_control": time.time(),
             "ultima_actualizacion_telemetria": time.time(),
@@ -84,7 +84,7 @@ class MQTTService:
                 "sensor": meta["sensor_modelo"],
                 "angulo_servo_zona": meta["angulo"],
                 "temperatura_actual": t_b,
-                "temperatura_predicha": round(t_b + 0.6, 2),
+                "temperatura_predicha": None,
                 "origen": "virtual",
                 "modo_simulacion": True,
                 "estado_ventilador": 0,
@@ -119,7 +119,7 @@ class MQTTService:
     def iniciar(self):
         try:
             logger.info(f"Conectando a Broker EMQX en {settings.MQTT_BROKER}:{settings.MQTT_PORT}...")
-            self.cliente.connect(settings.MQTT_BROKER, settings.MQTT_PORT, keepalive=60)
+            self.cliente.connect_async(settings.MQTT_BROKER, settings.MQTT_PORT, keepalive=60)
             self.cliente.loop_start()
         except Exception as e:
             logger.warning(f"⚠️ No se pudo conectar de inmediato al broker MQTT ({settings.MQTT_BROKER}:{settings.MQTT_PORT}): {e}")
@@ -230,7 +230,8 @@ class MQTTService:
             temp_predicha = ml_predictor.predecir_futuro(
                 zona, temp_actual,
                 horizonte_segundos=settings.VENTANA_PREDICCION_SEGUNDOS,
-                timestamp=ts_origen
+                timestamp=ts_origen,
+                permitir_estimacion_inicial=False,
             )
 
             fan_on = self.estado_sistema["estado_ventilador"] == 1
@@ -261,7 +262,7 @@ class MQTTService:
             self._actualizar_metricas_agregadas()
 
             # 2. Evaluar reglas de control autónomo SOLO si el sistema está en modo "autonomo"
-            if self.estado_sistema["modo_control"] == "autonomo":
+            if self.estado_sistema["modo_control"] == "autonomo" and settings.OPERATION_MODE in ("simulacion", "hibrido"):
                 self._evaluar_logica_control()
 
             # Refrescar bandera de enfriamiento en todas las zonas tras posible decisión
@@ -292,9 +293,9 @@ class MQTTService:
         if not zonas_validas:
             return
         temps_act = [float(z["temperatura_actual"]) for z in zonas_validas]
-        temps_pred = [float(z["temperatura_predicha"] or z["temperatura_actual"]) for z in zonas_validas]
+        temps_pred = [float(z["temperatura_predicha"]) for z in zonas_validas if z.get("temperatura_predicha") is not None]
         self.estado_sistema["temperatura_maxima_detectada"] = round(max(temps_act), 2)
-        self.estado_sistema["temperatura_maxima_predicha"] = round(max(temps_pred), 2)
+        self.estado_sistema["temperatura_maxima_predicha"] = round(max(temps_pred), 2) if temps_pred else None
         self.estado_sistema["temperatura_promedio"] = round(sum(temps_act) / len(temps_act), 2)
 
     def _evaluar_logica_control(self):
@@ -304,9 +305,10 @@ class MQTTService:
         orienta el servomotor hacia la zona más crítica y enciende el ventilador.
         Cuando todas las zonas descienden bajo 32.0°C, apaga el ventilador por histéresis.
         """
+        zonas_fisicas = {esp32_client.mapping_ds18b20, esp32_client.mapping_dht11} if settings.OPERATION_MODE == "hibrido" else set()
         zonas_disponibles = {
             k: v for k, v in self.ultimas_temperaturas.items()
-            if v.get("disponible") and v.get("temperatura_actual") is not None
+            if k not in zonas_fisicas and v.get("disponible") and v.get("temperatura_actual") is not None
         }
         if not zonas_disponibles:
             return
@@ -332,6 +334,7 @@ class MQTTService:
 
         nuevo_estado_fan = self.estado_sistema["estado_ventilador"]
         nuevo_angulo_servo = self.estado_sistema["angulo_servo"]
+        zona_objetivo = self.estado_sistema["zona_activa"]
         cambio_necesario = False
 
         if max_temp_pred >= settings.UMBRAL_TEMPERATURA_CRITICA or max_temp_act >= settings.UMBRAL_TEMPERATURA_CRITICA:
@@ -342,12 +345,17 @@ class MQTTService:
                 self.estado_sistema["zona_activa"] != zona_critica or
                 self.estado_sistema["angulo_servo"] != nuevo_angulo_servo):
                 cambio_necesario = True
-                self.estado_sistema["zona_activa"] = zona_critica
+                zona_objetivo = zona_critica
 
-        elif all(float(info["temperatura_actual"]) < settings.UMBRAL_HISTERESIS_APAGADO for info in zonas_disponibles.values()):
-            if self.estado_sistema["estado_ventilador"] == 1:
-                nuevo_estado_fan = 0
-                cambio_necesario = True
+        elif nuevo_estado_fan == 1 and (
+            zona_objetivo not in zonas_disponibles or
+            all(float(info["temperatura_actual"]) < settings.UMBRAL_HISTERESIS_APAGADO for info in zonas_disponibles.values())
+        ):
+            nuevo_estado_fan = 0
+            cambio_necesario = True
+            if zona_objetivo not in zonas_disponibles:
+                zona_objetivo = zona_critica
+                nuevo_angulo_servo = settings.ZONAS_ANGULOS[zona_objetivo]
 
         ahora = time.time()
         tiempo_desde_ultimo_envio = ahora - self.estado_sistema["ultimo_cambio_control"]
@@ -355,14 +363,18 @@ class MQTTService:
         if cambio_necesario or (nuevo_estado_fan == 1 and tiempo_desde_ultimo_envio > 30):
             self.estado_sistema["estado_ventilador"] = nuevo_estado_fan
             self.estado_sistema["angulo_servo"] = nuevo_angulo_servo
+            self.estado_sistema["zona_activa"] = zona_objetivo
             self.estado_sistema["ultimo_cambio_control"] = ahora
+            lectura_objetivo = zonas_disponibles[zona_objetivo]
+            temp_act = float(lectura_objetivo["temperatura_actual"])
+            temp_pred = lectura_objetivo.get("temperatura_predicha")
 
             self._emitir_orden_control(
-                zona=zona_critica,
+                zona=zona_objetivo,
                 fan_state=nuevo_estado_fan,
                 servo_angle=nuevo_angulo_servo,
-                temp_act=max_temp_act,
-                temp_pred=max_temp_pred,
+                temp_act=temp_act,
+                temp_pred=temp_pred if temp_pred is not None else temp_act,
                 timestamp_decision=ahora,
                 modo="autonomo"
             )
@@ -393,7 +405,7 @@ class MQTTService:
             ts_decision=timestamp_decision,
             comando_id=comando_id,
             modo_operacion=modo,
-            origen_ejecucion=settings.OPERATION_MODE
+            origen_ejecucion="simulacion"
         )
 
         if self.cliente and self._conectado:
@@ -477,6 +489,9 @@ class MQTTService:
         ahora = time.time()
 
         with self._lock:
+            es_fisica = zona in (esp32_client.mapping_ds18b20, esp32_client.mapping_dht11)
+            if settings.OPERATION_MODE in ("real", "hardware_real") or (settings.OPERATION_MODE == "hibrido" and es_fisica):
+                raise ValueError("Los controles MQTT actúan sobre zonas simuladas. El Nano controla las zonas físicas.")
             if activar_modo_manual:
                 self.estado_sistema["modo_control"] = "manual"
             self.estado_sistema["estado_ventilador"] = 1 if fan_state > 0 else 0
@@ -516,13 +531,21 @@ class MQTTService:
             "timestamp": ahora
         }
 
-    def cambiar_escenario_simulacion(self, escenario: str, zona_fallo_sensor: str = "zona2") -> Dict[str, Any]:
+    def cambiar_escenario_simulacion(self, escenario: str, zona_fallo_sensor: Optional[str] = None) -> Dict[str, Any]:
         """Envía orden MQTT al simulador para cambiar el escenario térmico en vivo"""
         ids_validos = [e["id"] for e in ESCENARIOS_CATALOGO]
         if escenario not in ids_validos:
             raise ValueError(f"Escenario inválido. Opciones: {ids_validos}")
 
         with self._lock:
+            if escenario == "fallo_sensor":
+                zonas = set(settings.ZONAS_METADATOS)
+                if settings.OPERATION_MODE == "hibrido":
+                    zonas.difference_update((esp32_client.mapping_ds18b20, esp32_client.mapping_dht11))
+                if zona_fallo_sensor is None:
+                    zona_fallo_sensor = "zona2" if "zona2" in zonas else min(zonas)
+                if zona_fallo_sensor not in zonas:
+                    raise ValueError("Selecciona una zona simulada para probar el fallo de sensor.")
             self.estado_sistema["escenario_simulacion"] = escenario
             self.estado_sistema["zona_fallo_sensor"] = zona_fallo_sensor if escenario == "fallo_sensor" else None
             ml_predictor.reiniciar_historial()
@@ -615,9 +638,7 @@ class MQTTService:
 
             elif modo_op == "real":
                 if z_id in lecturas_hw:
-                    hw_z = dict(base_z)
-                    hw_z.update(lecturas_hw[z_id])
-                    zonas_resultado.append(hw_z)
+                    zonas_resultado.append(dict(lecturas_hw[z_id]))
                 else:
                     zonas_resultado.append({
                         "zona": z_id,
@@ -642,9 +663,7 @@ class MQTTService:
 
             elif modo_op == "hibrido":
                 if z_id in lecturas_hw:
-                    hw_z = dict(base_z)
-                    hw_z.update(lecturas_hw[z_id])
-                    zonas_resultado.append(hw_z)
+                    zonas_resultado.append(dict(lecturas_hw[z_id]))
                 else:
                     base_z["origen"] = "virtual"
                     base_z["modo_simulacion"] = True
@@ -685,7 +704,7 @@ class MQTTService:
                     continue
 
                 t_act = float(info["temperatura_actual"])
-                t_pred = float(info.get("temperatura_predicha") or t_act)
+                t_pred = info.get("temperatura_predicha")
 
                 if t_act >= settings.UMBRAL_TEMPERATURA_CRITICA:
                     alertas.append({
@@ -701,7 +720,7 @@ class MQTTService:
                         "temperatura_predicha": t_pred,
                         "hora": ahora_str
                     })
-                elif t_pred >= settings.UMBRAL_TEMPERATURA_CRITICA:
+                elif t_pred is not None and t_pred >= settings.UMBRAL_TEMPERATURA_CRITICA:
                     alertas.append({
                         "id": f"alerta_predictiva_{z_id}",
                         "zona": z_id,
@@ -724,7 +743,7 @@ class MQTTService:
                         "severidad": "advertencia",
                         "tipo": "PRECAUCION_TERMICA",
                         "titulo": f"{nombre} [{origen_lbl}]: Temperatura Elevada ({t_act:.1f}°C)",
-                        "mensaje": f"Acercándose al umbral crítico (proyección +10m: {t_pred:.1f}°C).",
+                        "mensaje": f"Temperatura de {t_act:.1f} °C cerca del umbral crítico.",
                         "temperatura_actual": t_act,
                         "temperatura_predicha": t_pred,
                         "hora": ahora_str
@@ -743,9 +762,9 @@ class MQTTService:
             ]
             if zonas_validas:
                 temps_act = [float(z["temperatura_actual"]) for z in zonas_validas]
-                temps_pred = [float(z.get("temperatura_predicha") or z["temperatura_actual"]) for z in zonas_validas]
+                temps_pred = [float(z["temperatura_predicha"]) for z in zonas_validas if z.get("temperatura_predicha") is not None]
                 self.estado_sistema["temperatura_maxima_detectada"] = round(max(temps_act), 2)
-                self.estado_sistema["temperatura_maxima_predicha"] = round(max(temps_pred), 2)
+                self.estado_sistema["temperatura_maxima_predicha"] = round(max(temps_pred), 2) if temps_pred else None
                 self.estado_sistema["temperatura_promedio"] = round(sum(temps_act) / len(temps_act), 2)
 
             estado_hw = esp32_client.obtener_estado()

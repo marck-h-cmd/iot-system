@@ -5,10 +5,11 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
-import { PruebasEstadisticasResponse } from "../../types/iot";
+import { EvidenciaHistorica, PruebasEstadisticasResponse } from "../../types/iot";
 
 interface StatisticsViewProps {
   pruebasEstadisticas: PruebasEstadisticasResponse | null;
+  evidencia: EvidenciaHistorica | null;
   darkMode: boolean;
   cardClass: string;
   subCardClass: string;
@@ -16,6 +17,7 @@ interface StatisticsViewProps {
 
 export function StatisticsView({
   pruebasEstadisticas,
+  evidencia,
   darkMode,
   cardClass,
   subCardClass,
@@ -33,16 +35,52 @@ export function StatisticsView({
 
   return (
     <div className="space-y-5">
+      {evidencia && (
+        <section aria-labelledby="evidencia-historica">
+          <h2 id="evidencia-historica" className={`mb-3 text-base font-semibold ${textPrimary}`}>Evidencia histórica del artículo</h2>
+          <div className="grid gap-4 lg:grid-cols-3">
+            <article className={`${cardClass} rounded-xl p-5`}>
+              <h3 className="font-semibold">Prototipo físico</h3>
+              <p className={`mt-2 text-2xl font-semibold ${textPrimary}`}>{evidencia.hardware.lecturas} lecturas</p>
+              <ul className={`mt-2 space-y-1 text-xs ${textSecondary}`}>
+                {evidencia.hardware.zonas.map((z) => (
+                  <li key={z.zona}>{z.sensor} · {z.lecturas} lecturas · {z.minima}–{z.maxima} °C</li>
+                ))}
+              </ul>
+              {evidencia.hardware.transiciones.map((t, i) => (
+                <p key={i} className={`mt-3 text-xs ${textSecondary}`}>
+                  {t.zona.toUpperCase()} · {t.antes.toFixed(1)} °C con el ventilador apagado y {t.inicio.toFixed(1)} °C en la primera lectura con encendido.
+                  {t.posterior != null && ` La siguiente lectura fue de ${t.posterior.toFixed(1)} °C tras ${t.minutos_hasta_posterior} min.`}
+                </p>
+              ))}
+            </article>
+            <article className={`${cardClass} rounded-xl p-5`}>
+              <h3 className="font-semibold">Órdenes simuladas</h3>
+              <p className={`mt-2 text-2xl font-semibold ${textPrimary}`}>{evidencia.simulacion.eventos} eventos</p>
+              <p className={`mt-2 text-xs ${textSecondary}`}>{evidencia.simulacion.por_modo.autonomo ?? 0} autónomos y {evidencia.simulacion.por_modo.manual ?? 0} manuales</p>
+              <p className={`mt-2 text-xs ${textSecondary}`}>Latencia mediana registrada de {evidencia.simulacion.latencia_mediana_ms ?? "—"} ms.</p>
+            </article>
+            <article className={`${cardClass} rounded-xl p-5`}>
+              <h3 className="font-semibold">Pares con origen físico sin verificar</h3>
+              <p className={`mt-2 text-2xl font-semibold ${textPrimary}`}>{evidencia.pares.total} pares</p>
+              <p className={`mt-2 text-xs ${textSecondary}`}>Caída media en el archivo de {evidencia.pares.caida_declarada_media_c?.toFixed(2) ?? "—"} °C.</p>
+              <p className={`mt-2 text-xs ${textSecondary}`}>
+                {evidencia.pares.inicios_coincidentes} valores iniciales coinciden con eventos simulados. Los valores finales carecen de trazabilidad a un sensor.
+              </p>
+            </article>
+          </div>
+        </section>
+      )}
       {/* Resumen compacto superior */}
       <div
         className={`${cardClass} rounded-xl p-4 flex flex-wrap items-center justify-between gap-4`}
       >
         <div>
           <h2 className={`text-sm font-semibold ${textPrimary}`}>
-            Análisis estadístico inferencial (α = 0.05)
+            Pruebas exploratorias en simulación (α = 0.05)
           </h2>
           <p className={`text-xs mt-0.5 ${textSecondary}`}>
-            Cálculos ejecutados con SciPy sobre series temporales en modo simulación
+            Series del simulador MQTT evaluadas con SciPy. Las lecturas consecutivas pueden estar autocorrelacionadas.
           </p>
         </div>
 

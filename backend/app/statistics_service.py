@@ -17,7 +17,6 @@ import logging
 import numpy as np
 from typing import Dict, Any, List, Tuple, Optional
 from scipy import stats
-from app.config import settings
 from app.database import db_manager
 from app.ml_model import ml_predictor
 
@@ -175,8 +174,7 @@ class StatisticsService:
         3. Análisis de Varianza One-Way ANOVA (Diferencia térmica entre las 5 computadoras)
         4. Prueba de Normalidad de Shapiro-Wilk (Distribución de residuos del modelo ML)
         """
-        es_simulacion = settings.OPERATION_MODE == "simulacion"
-        etiqueta_origen = "Datos Sintéticos de Simulación (Modo Demo)" if es_simulacion else "Mediciones Físicas"
+        etiqueta_origen = "Telemetría simulada por MQTT"
 
         # =========================================================================
         # 1. PRUEBA t DE STUDENT PAREADA (Efectividad Térmica de Refrigeración)
@@ -197,15 +195,15 @@ class StatisticsService:
                 p_val = round(float(p_val_enf), 6)
                 d_cohen = round(media_dif / std_dif, 3)
             else:
-                t_val, p_val, d_cohen = 0.0, 1.0, 0.0
+                t_val, p_val, d_cohen = None, None, None
 
-            sig_enf = bool(p_val < 0.05 and media_dif > 0)
+            sig_enf = p_val is not None and p_val < 0.05 and media_dif > 0
             prueba_enfriamiento = {
                 "nombre": "Prueba t de Student para Muestras Pareadas",
                 "variable": "Efectividad Térmica (T_disparo vs T_post_enfriamiento en Simulación)",
                 "origen_datos": etiqueta_origen,
-                "estado_muestra": "SUFICIENTE",
-                "suficiente": True,
+                "estado_muestra": "SUFICIENTE" if p_val is not None else "VARIANZA_CERO",
+                "suficiente": p_val is not None,
                 "hipotesis_nula": "H0: μ_antes ≤ μ_después (El flujo de aire no reduce la temperatura)",
                 "hipotesis_alternativa": "H1: μ_después < μ_antes (La ventilación reduce la temperatura)",
                 "n_muestras": n_enf,
@@ -217,13 +215,14 @@ class StatisticsService:
                 "p_valor": p_val,
                 "nivel_significancia": 0.05,
                 "d_cohen": d_cohen,
-                "magnitud_efecto": "Grande (≥0.8)" if d_cohen >= 0.8 else ("Moderada" if d_cohen >= 0.5 else "Leve"),
+                "magnitud_efecto": None if d_cohen is None else (
+                    "Grande" if abs(d_cohen) >= 0.8 else "Moderada" if abs(d_cohen) >= 0.5 else "Leve"
+                ),
                 "es_significativo": sig_enf,
                 "conclusion": (
-                    f"[Resultado Demostrativo en Simulación] Con n={n_enf} ciclos evaluados, se observa una "
-                    f"variación media de {media_dif:+.2f} °C (p={p_val:.4f}). "
-                    + ("Diferencia estadísticamente significativa en el modelo térmico simulado." if sig_enf
-                       else "Aún se requieren más ciclos completos de enfriamiento para confirmar significancia.")
+                    f"Variación media de {media_dif:+.2f} °C en {n_enf} pares simulados. "
+                    + (f"Prueba unilateral exploratoria con p={p_val:.4f}."
+                       if p_val is not None else "Las diferencias son constantes.")
                 )
             }
         else:
@@ -248,7 +247,7 @@ class StatisticsService:
                 "es_significativo": False,
                 "conclusion": (
                     f"Muestras insuficientes ({n_enf}/3 ciclos de enfriamiento con lectura posterior registrada). "
-                    "Active el escenario 'Sobrecalentamiento' o deje correr el enfriamiento ~30 segundos para recolectar pares reales."
+                    "Se necesitan lecturas simuladas entre 120 y 135 segundos después de órdenes confirmadas."
                 )
             }
 
@@ -266,16 +265,15 @@ class StatisticsService:
                 t_lat = round(float(t_stat_lat), 3)
                 p_lat = round(float(p_val_lat), 6)
             else:
-                t_lat = -99.0 if media_lat < 200.0 else 0.0
-                p_lat = 0.0001 if media_lat < 200.0 else 1.0
+                t_lat, p_lat = None, None
 
-            sig_lat = bool(p_lat < 0.05 and media_lat < 200.0)
+            sig_lat = p_lat is not None and p_lat < 0.05 and media_lat < 200.0
             prueba_latencia = {
                 "nombre": "Prueba t de Student para Una Muestra",
                 "variable": "Latencia de Bucle Cerrado en Simulación (Orden Backend -> ACK Simulador)",
                 "origen_datos": etiqueta_origen,
-                "estado_muestra": "SUFICIENTE",
-                "suficiente": True,
+                "estado_muestra": "SUFICIENTE" if p_lat is not None else "VARIANZA_CERO",
+                "suficiente": p_lat is not None,
                 "umbral_critico_ms": 200.0,
                 "hipotesis_nula": "H0: μ_latencia ≥ 200 ms (Excede el umbral de respuesta rápida)",
                 "hipotesis_alternativa": "H1: μ_latencia < 200 ms (Cumple tiempo de respuesta < 200 ms)",
@@ -287,8 +285,8 @@ class StatisticsService:
                 "p_valor": p_lat,
                 "es_significativo": sig_lat,
                 "conclusion": (
-                    f"[Medición en Simulación MQTT] Sobre n={n_lat} confirmaciones ACK correlacionadas, la latencia "
-                    f"media medida fue {media_lat:.2f} ms (±{std_lat:.2f} ms), significativamente menor a 200 ms (p={p_lat:.4f})."
+                    f"Latencia media de {media_lat:.2f} ms en {n_lat} confirmaciones MQTT. "
+                    + (f"Prueba frente a 200 ms con p={p_lat:.4f}." if p_lat is not None else "Las latencias son constantes.")
                 )
             }
         else:
@@ -324,18 +322,18 @@ class StatisticsService:
         if len(zonas_con_datos) >= 2 and n_total_anova >= 6:
             try:
                 f_stat, p_val_anova = stats.f_oneway(*zonas_con_datos)
-                f_val = round(float(f_stat), 3) if not np.isnan(f_stat) else 0.0
-                p_anova = round(float(p_val_anova), 6) if not np.isnan(p_val_anova) else 1.0
+                f_val = round(float(f_stat), 3) if np.isfinite(f_stat) else None
+                p_anova = round(float(p_val_anova), 6) if f_val is not None and np.isfinite(p_val_anova) else None
             except Exception:
-                f_val, p_anova = 0.0, 1.0
+                f_val, p_anova = None, None
 
-            sig_anova = bool(p_anova < 0.05)
+            sig_anova = p_anova is not None and p_anova < 0.05
             prueba_anova = {
                 "nombre": "Análisis de Varianza de Un Factor (One-Way ANOVA)",
                 "variable": "Distribución Térmica Inter-Zonas (PC 1 a PC 5)",
                 "origen_datos": etiqueta_origen,
-                "estado_muestra": "SUFICIENTE",
-                "suficiente": True,
+                "estado_muestra": "SUFICIENTE" if p_anova is not None else "VARIANZA_CERO",
+                "suficiente": p_anova is not None,
                 "n_muestras": n_total_anova,
                 "zonas_evaluadas": len(zonas_con_datos),
                 "muestras_por_zona": conteo_por_zona,
@@ -345,10 +343,9 @@ class StatisticsService:
                 "p_valor": p_anova,
                 "es_significativo": sig_anova,
                 "conclusion": (
-                    f"[Resultado Demostrativo en Simulación] Con {n_total_anova} lecturas distribuidas en "
-                    f"{len(zonas_con_datos)} zonas (F={f_val}, p={p_anova:.4f}), "
-                    + ("se confirma heterogeneidad térmica entre computadoras, justificando el direccionamiento del servomotor."
-                       if sig_anova else "las temperaturas medias entre zonas aún son similares.")
+                    f"{n_total_anova} lecturas simuladas de {len(zonas_con_datos)} zonas. "
+                    + (f"Comparación exploratoria con F={f_val}, p={p_anova:.4f}."
+                       if p_anova is not None else "La varianza entre lecturas de cada zona no permite la prueba.")
                 )
             }
         else:
@@ -375,21 +372,21 @@ class StatisticsService:
         residuos = self._obtener_residuos_ml_reales()
         n_res = len(residuos)
 
-        if n_res >= 3:
+        if n_res >= 3 and np.ptp(residuos) > 0:
             try:
                 w_stat, p_val_norm = stats.shapiro(residuos)
                 w_val = round(float(w_stat), 4)
                 p_norm = round(float(p_val_norm), 4)
             except Exception:
-                w_val, p_norm = 1.0, 0.5
+                w_val, p_norm = None, None
 
-            es_normal = bool(p_norm >= 0.05)
+            es_normal = p_norm is not None and p_norm >= 0.05
             prueba_normalidad = {
                 "nombre": "Prueba de Normalidad de Shapiro-Wilk",
                 "variable": "Residuos de Predicción del Modelo ML (T_observada - T_predicha)",
                 "origen_datos": etiqueta_origen,
-                "estado_muestra": "SUFICIENTE",
-                "suficiente": True,
+                "estado_muestra": "SUFICIENTE" if p_norm is not None else "ERROR",
+                "suficiente": p_norm is not None,
                 "hipotesis_nula": "H0: Los errores de predicción provienen de una distribución normal",
                 "hipotesis_alternativa": "H1: Los errores se desvían de la normalidad",
                 "n_muestras": n_res,
@@ -400,8 +397,8 @@ class StatisticsService:
                 "conclusion": (
                     f"[Resultado Demostrativo en Simulación] Evaluados n={n_res} residuos de predicción "
                     f"(W={w_val}, p={p_norm:.4f}). "
-                    + ("No se rechaza H0 (p ≥ 0.05): residuos compatibles con distribución normal."
-                       if es_normal else "Se detecta asimetría en los residuos debido a cambios bruscos de escenario térmico.")
+                    + ("Sin evidencia para rechazar normalidad." if es_normal else "Se rechaza la hipótesis de normalidad.")
+                    if p_norm is not None else "La prueba no produjo un resultado válido."
                 )
             }
         else:
@@ -409,7 +406,7 @@ class StatisticsService:
                 "nombre": "Prueba de Normalidad de Shapiro-Wilk",
                 "variable": "Residuos de Predicción del Modelo ML (T_observada - T_predicha)",
                 "origen_datos": etiqueta_origen,
-                "estado_muestra": "MUESTRAS_INSUFICIENTES",
+                "estado_muestra": "VARIANZA_CERO" if n_res >= 3 else "MUESTRAS_INSUFICIENTES",
                 "suficiente": False,
                 "hipotesis_nula": "H0: Los errores de predicción siguen una distribución normal",
                 "hipotesis_alternativa": "H1: Los errores no siguen una distribución normal",
@@ -419,19 +416,15 @@ class StatisticsService:
                 "p_valor": None,
                 "es_normal": False,
                 "conclusion": (
-                    f"Muestras insuficientes ({n_res}/3 pares con desfase temporal). "
-                    "Se requieren al menos 3 pares históricos para ejecutar el test de Shapiro-Wilk."
+                    "Los residuos son constantes." if n_res >= 3 else
+                    f"Se requieren al menos 3 pares con desfase de 10 minutos. Disponibles: {n_res}."
                 )
             }
 
         return {
             "estado": "exitoso",
-            "modo_operacion": settings.OPERATION_MODE,
-            "aviso_metodologico": (
-                "IMPORTANTE: El sistema opera en MODO SIMULACIÓN. Todas las pruebas estadísticas se calculan "
-                "en vivo sobre la base de datos de simulación con fines demostrativos y académicos; no constituyen "
-                "evidencia de experimentación con hardware físico."
-            ),
+            "modo_operacion": "simulacion",
+            "aviso_metodologico": "Pruebas exploratorias sobre series simuladas por MQTT. Las lecturas consecutivas pueden estar autocorrelacionadas.",
             "pruebas": {
                 "t_student_enfriamiento": prueba_enfriamiento,
                 "t_student_latencia": prueba_latencia,
@@ -451,29 +444,28 @@ class StatisticsService:
 
         total_msgs = resumen["dimension_1"]["total_mensajes"]
         intervalo_val = resumen["dimension_1"].get("intervalo_adquisicion_seg")
-        std_int = resumen["dimension_1"].get("desviacion_intervalo_seg", 0.08)
+        std_int = resumen["dimension_1"].get("desviacion_intervalo_seg")
         tasa_entrega = resumen["dimension_1"].get("tasa_entrega_pct")
 
         total_ev = resumen["dimension_3"].get("total_eventos", 0)
         lat_prom = resumen["dimension_3"].get("latencia_promedio_ms")
         tasa_ack = resumen["dimension_3"].get("tasa_ack_pct")
 
-        delta_t = resumen["dimension_4"].get("delta_termico_c")
-        duty_fan = resumen["dimension_4"].get("fraccion_tiempo_fan_pct")
-        min_fan = resumen["dimension_4"].get("minutos_fan_on", 0.0)
+        antes, despues = self._obtener_pares_reales_enfriamiento()
+        delta_t = round(float(np.mean(antes - despues)), 2) if len(antes) >= 3 else None
+        duty_fan = resumen["dimension_4"].get("fraccion_lecturas_fan_pct")
 
         ind_1_1_meta = evaluar_meta_indicador_metodologico("IND-1.1", intervalo_val, total_msgs)
         ind_1_2_meta = evaluar_meta_indicador_metodologico("IND-1.2", tasa_entrega, total_msgs)
         ind_2_1_meta = evaluar_meta_indicador_metodologico("IND-2.1", metricas_ml["mae"], metricas_ml["muestras"])
         ind_2_2_meta = evaluar_meta_indicador_metodologico("IND-2.2", metricas_ml["rmse"], metricas_ml["muestras"])
         ind_2_3_meta = evaluar_meta_indicador_metodologico("IND-2.3", metricas_ml["r2"], metricas_ml["muestras"])
-        ind_3_1_meta = evaluar_meta_indicador_metodologico("IND-3.1", 100.0 if total_ev > 0 else None, total_ev)
+        ind_3_1_meta = evaluar_meta_indicador_metodologico("IND-3.1", None)
         ind_3_2_meta = evaluar_meta_indicador_metodologico("IND-3.2", lat_prom, total_ev)
         ind_4_1_meta = evaluar_meta_indicador_metodologico("IND-4.1", delta_t, total_msgs)
-        ind_4_2_meta = evaluar_meta_indicador_metodologico("IND-4.2", duty_fan, total_msgs)
 
         return {
-            "modo_operacion": settings.OPERATION_MODE,
+            "modo_operacion": "simulacion",
             "etiqueta_origen": "Resultados calculados con datos sintéticos en MODO SIMULACIÓN",
             "dimension_1_transmision": {
                 "titulo": "Dimensión 1: Transmisión y Arquitectura IoT",
@@ -485,7 +477,7 @@ class StatisticsService:
                         "valor": f"{intervalo_val} s" if intervalo_val is not None else "Sin muestras",
                         "unidad": "s",
                         "meta": "5.0 s (±0.5 s)",
-                        "desviacion_std": f"±{std_int} s" if intervalo_val is not None else "N/A",
+                        "desviacion_std": f"±{std_int} s" if std_int is not None else "N/A",
                         "muestras": total_msgs,
                         "disponible": intervalo_val is not None,
                         "cumple": ind_1_1_meta["cumple"],
@@ -585,21 +577,18 @@ class StatisticsService:
                     {
                         "codigo": "IND-3.1",
                         "nombre": "Exactitud de Selección de Zona",
-                        "valor_numerico": 100.0 if total_ev > 0 else None,
-                        "valor": "100.0%" if total_ev > 0 else "Sin eventos",
+                        "valor_numerico": None,
+                        "valor": "Sin verificación",
                         "unidad": "%",
                         "meta": "100.0%",
                         "muestras": total_ev,
-                        "disponible": total_ev > 0,
+                        "disponible": False,
                         "cumple": ind_3_1_meta["cumple"],
                         "estado_meta": ind_3_1_meta["estado_meta"],
                         "etiqueta_meta": ind_3_1_meta["etiqueta_meta"],
                         "estado": ind_3_1_meta["etiqueta_meta"],
                         "descripcion": "Coincidencia entre la estación con mayor temperatura crítica y el ángulo asignado al servomotor.",
-                        "interpretacion": (
-                            f"Sobre {total_ev} órdenes emitidas, el servomotor se orientó al ángulo exacto de la zona objetivo."
-                            if total_ev > 0 else "Aún no se han emitido órdenes de control."
-                        )
+                        "interpretacion": "La validación requiere registrar la zona de referencia junto con el resultado de cada orden."
                     },
                     {
                         "codigo": "IND-3.2",
@@ -630,41 +619,33 @@ class StatisticsService:
                         "codigo": "IND-4.1",
                         "nombre": "Variación Térmica en Zona Refrigerada (ΔT)",
                         "valor_numerico": delta_t,
-                        "valor": f"-{delta_t} °C" if delta_t is not None else "En recolección",
+                        "valor": f"{delta_t} °C" if delta_t is not None else "En recolección",
                         "unidad": "°C",
                         "meta": "Reducción > 2.0 °C",
-                        "muestras": total_msgs,
+                        "muestras": len(antes),
                         "disponible": delta_t is not None,
                         "cumple": ind_4_1_meta["cumple"],
                         "estado_meta": ind_4_1_meta["estado_meta"],
                         "etiqueta_meta": ind_4_1_meta["etiqueta_meta"],
                         "estado": ind_4_1_meta["etiqueta_meta"],
-                        "descripcion": "Amplitud de reducción térmica registrada en las estaciones atendidas por el ventilador en la última hora.",
-                        "interpretacion": (
-                            f"Reducción media observada de {delta_t} °C en las zonas que recibieron flujo de enfriamiento."
-                            if delta_t is not None else "Se calculará automáticamente cuando el ventilador enfríe una estación."
-                        )
+                        "descripcion": "Diferencia media entre la temperatura al emitir una orden de encendido y la lectura de la misma zona a los dos minutos.",
+                        "interpretacion": "Comparación descriptiva de eventos simulados con ACK y lectura posterior."
                     },
                     {
                         "codigo": "IND-4.2",
-                        "nombre": "Duty Cycle del Ventilador Compartido",
+                        "nombre": "Lecturas con Ventilador Simulado Activo",
                         "valor_numerico": duty_fan,
-                        "valor": f"{duty_fan}%" if duty_fan is not None else "0.0%",
+                        "valor": f"{duty_fan}%" if duty_fan is not None else "Sin lecturas",
                         "unidad": "%",
                         "meta": "< 50.0% (Uso eficiente)",
-                        "ahorro_energetico_pct": round(100.0 - float(duty_fan or 0.0), 1),
-                        "minutos_activo": min_fan,
                         "muestras": total_msgs,
                         "disponible": duty_fan is not None,
-                        "cumple": ind_4_2_meta["cumple"],
-                        "estado_meta": ind_4_2_meta["estado_meta"],
-                        "etiqueta_meta": ind_4_2_meta["etiqueta_meta"],
-                        "estado": ind_4_2_meta["etiqueta_meta"],
-                        "descripcion": "Fracción de tiempo en que el ventilador estuvo encendido respecto al tiempo total de monitoreo.",
-                        "interpretacion": (
-                            f"Ventilador activo el {duty_fan}% del tiempo ({min_fan} min en la última hora), "
-                            f"optimizando el uso frente a 5 ventiladores continuos."
-                        )
+                        "cumple": False,
+                        "estado_meta": "sin_meta_definida",
+                        "etiqueta_meta": "Requiere medición de tiempo",
+                        "estado": "Requiere medición de tiempo",
+                        "descripcion": "Fracción de registros simulados de la última hora con ventilador marcado como encendido.",
+                        "interpretacion": "El consumo en Wh requiere medición eléctrica."
                     }
                 ]
             }
@@ -674,10 +655,8 @@ class StatisticsService:
 
     def _obtener_pares_reales_enfriamiento(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Busca eventos de control donde se encendió el ventilador (fan_state=1) y los empareja
-        con la temperatura mínima alcanzada por esa misma zona en los 90 segundos posteriores.
-        Si no hay suficientes eventos con ventana de 90s, utiliza los pares de enfriamiento
-        registrados en `registro_termico` cuando `estado_ventilador = 1`.
+        Empareja órdenes de encendido confirmadas por el simulador con la primera lectura
+        simulada de su zona entre 120 y 135 segundos después de la orden.
         """
         antes_list: List[float] = []
         despues_list: List[float] = []
@@ -685,15 +664,16 @@ class StatisticsService:
             conn = db_manager.get_connection()
             cursor = conn.cursor(dictionary=True)
             cursor.execute("""
-                SELECT c.id, c.zona_objetivo, c.temperatura_disparo, c.timestamp_decision,
-                       MIN(r.temperatura_actual) AS temp_posterior
+                SELECT c.temperatura_disparo,
+                       (SELECT r.temperatura_actual
+                        FROM registro_termico r
+                        WHERE r.zona = c.zona_objetivo AND r.origen = 'virtual'
+                          AND r.timestamp BETWEEN FROM_UNIXTIME(c.timestamp_decision + 120)
+                                              AND FROM_UNIXTIME(c.timestamp_decision + 135)
+                        ORDER BY r.timestamp, r.id LIMIT 1) AS temp_posterior
                 FROM control_eventos c
-                JOIN registro_termico r
-                  ON r.zona = c.zona_objetivo
-                 AND r.timestamp_origen > c.timestamp_decision
-                 AND r.timestamp_origen <= (c.timestamp_decision + 120)
-                WHERE c.fan_state = 1
-                GROUP BY c.id, c.zona_objetivo, c.temperatura_disparo, c.timestamp_decision
+                WHERE c.fan_state = 1 AND c.estado_comando = 'EJECUTADO_SIMULACION'
+                  AND c.timestamp_decision <= UNIX_TIMESTAMP() - 120
                 ORDER BY c.id DESC
                 LIMIT 30
             """)
@@ -701,24 +681,6 @@ class StatisticsService:
                 if f["temperatura_disparo"] is not None and f["temp_posterior"] is not None:
                     antes_list.append(float(f["temperatura_disparo"]))
                     despues_list.append(float(f["temp_posterior"]))
-
-            # Si aún hay menos de 3 eventos con 120s posteriores, buscar tramos consecutivos con ventilador encendido en registro_termico
-            if len(antes_list) < 3:
-                cursor.execute("""
-                    SELECT r1.temperatura_actual AS t_ini, r2.temperatura_actual AS t_fin
-                    FROM registro_termico r1
-                    JOIN registro_termico r2
-                      ON r1.zona = r2.zona
-                     AND r2.id > r1.id
-                     AND (r2.timestamp_origen - r1.timestamp_origen) BETWEEN 10 AND 60
-                    WHERE r1.estado_ventilador = 1 AND r2.estado_ventilador = 1
-                      AND r1.temperatura_actual > r2.temperatura_actual
-                    ORDER BY r1.id DESC
-                    LIMIT 25
-                """)
-                for f in cursor.fetchall():
-                    antes_list.append(float(f["t_ini"]))
-                    despues_list.append(float(f["t_fin"]))
 
             cursor.close()
             conn.close()
@@ -735,7 +697,8 @@ class StatisticsService:
             cursor.execute("""
                 SELECT latencia_ms
                 FROM control_eventos
-                WHERE ack_recibido = 1 AND latencia_ms IS NOT NULL AND latencia_ms > 0
+                WHERE origen_ejecucion = 'simulacion'
+                  AND ack_recibido = 1 AND latencia_ms IS NOT NULL AND latencia_ms > 0
                 ORDER BY id DESC
                 LIMIT 40
             """)
@@ -756,7 +719,7 @@ class StatisticsService:
             cursor = conn.cursor(dictionary=True)
             for z in ["zona1", "zona2", "zona3", "zona4", "zona5"]:
                 cursor.execute(
-                    "SELECT temperatura_actual FROM registro_termico WHERE zona = %s ORDER BY id DESC LIMIT 30",
+                    "SELECT temperatura_actual FROM registro_termico WHERE origen = 'virtual' AND zona = %s ORDER BY id DESC LIMIT 30",
                     (z,)
                 )
                 filas = cursor.fetchall()
@@ -772,9 +735,6 @@ class StatisticsService:
     def _obtener_residuos_ml_reales(self) -> np.ndarray:
         """Obtiene los residuos reales (y_real - y_pred) de los pares disponibles en la base de datos"""
         pares = db_manager.obtener_pares_para_metricas(zona="todas", ventana_segundos=600, tolerancia=60)
-        if not pares:
-            # Si aún no han pasado 10 minutos pero hay pares cortos en la sesión actual, evaluar residuos a corto plazo disponibles
-            pares = db_manager.obtener_pares_para_metricas(zona="todas", ventana_segundos=30, tolerancia=20)
         if pares:
             return np.array([float(p[1] - p[0]) for p in pares], dtype=float)
         return np.array([], dtype=float)

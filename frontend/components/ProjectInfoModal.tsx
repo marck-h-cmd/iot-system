@@ -57,10 +57,11 @@ export function ProjectInfoModal({ open, darkMode, onClose }: ProjectInfoModalPr
           <div className={`p-3.5 rounded-lg border ${boxClass}`}>
             <div className="flex items-center gap-2 font-medium mb-1">
               <Cpu className="w-4 h-4 text-sky-500" />
-              <span>Estado de operación actual: Simulación de 5 zonas</span>
+              <span>Montaje físico y simulación MQTT</span>
             </div>
             <p className={`text-xs leading-relaxed ${textMuted}`}>
-              El circuito físico (Arduino Nano, ESP32, sensores DHT11/DS18B20, ventilador MOSFET y servomotor SG90) se encuentra modelado por el simulador termodinámico Python conectado vía MQTT EMQX.
+              El Nano controla el ventilador y la paleta del montaje físico. El ESP32 transmite las lecturas por Wi-Fi.
+              El simulador Python publica las zonas virtuales en EMQX y responde a las órdenes predictivas del backend.
             </p>
           </div>
 

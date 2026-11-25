@@ -33,7 +33,8 @@ class LinearRegressionPredictor:
         ts = timestamp if timestamp is not None else time.time()
         self.historial_zonas[zona].append((float(ts), float(temperatura)))
 
-    def predecir_futuro(self, zona: str, temp_actual: float, horizonte_segundos: int = 600, timestamp: Optional[float] = None) -> float:
+    def predecir_futuro(self, zona: str, temp_actual: float, horizonte_segundos: int = 600,
+                        timestamp: Optional[float] = None, permitir_estimacion_inicial: bool = True) -> Optional[float]:
         """
         Calcula la temperatura estimada a +10 minutos (600 segundos).
         Utiliza LinearRegression de scikit-learn sobre las muestras acumuladas,
@@ -68,7 +69,10 @@ class LinearRegressionPredictor:
             except Exception as e:
                 logger.warning(f"Error entrenando LinearRegression para {zona}: {e}")
 
-        # Si aún hay menos de 3 muestras en la ventana recién iniciada, proyectar tendencia suave
+        if not permitir_estimacion_inicial:
+            return None
+
+        # Compatibilidad con los consumidores que solicitan una estimación inicial.
         delta_inicial = 0.9 if temp_actual >= 33.5 else 0.4
         return round(temp_actual + delta_inicial, 2)
 
@@ -101,7 +105,7 @@ class LinearRegressionPredictor:
         if varianza_total > 1e-6 and n >= 2:
             suma_residuos = float(np.sum((y_true - y_pred) ** 2))
             r2 = float(1.0 - (suma_residuos / varianza_total))
-            r2 = round(max(-1.0, min(1.0, r2)), 4)
+            r2 = round(r2, 4)
         else:
             r2 = None
 

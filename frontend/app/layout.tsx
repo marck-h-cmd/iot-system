@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Smart Cooling — Monitoreo y Control Térmico IoT",
   description:
-    "Sistema de enfriamiento autónomo inteligente para equipos electrónicos con predicción lineal y simulación de 5 zonas.",
+    "Telemetría física y simulada por MQTT, predicción térmica y control autónomo.",
   icons: {
     icon: "/icon.svg",
   },

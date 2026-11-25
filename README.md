@@ -1,37 +1,44 @@
 # SMART COOLING IoT 2.0 — Sistema de Enfriamiento Autónomo Inteligente para Equipos Electrónicos
 
 **Universidad Nacional de Trujillo (UNT) — Escuela Profesional de Ingeniería de Sistemas**  
-**Versión:** `2.0.0` (`MODO SIMULACIÓN UNIFICADO — 5 ZONAS`)
+**Versión:** `2.0.0`
 
 ---
 
 ## 1. Descripción General
 
-**SMART COOLING IoT 2.0** monitorea las temperaturas de **cinco estaciones de cómputo (`PC 1` a `PC 5`)**, predice incrementos térmicos con **10 minutos de anticipación** mediante Regresión Lineal (`Scikit-Learn`) y controla un sistema de refrigeración compartido compuesto por un **ventilador DC 5V (módulo MOSFET)** y un **servomotor direccional SG90 (`0° a 180°`)**.
+En modo híbrido el dashboard muestra dos estaciones físicas y tres simuladas. **PC 1** usa el DHT11 y **PC 2** usa el DS18B20. El Arduino Nano controla el ventilador y el servomotor. El ESP32 publica los datos del Nano por Wi-Fi en `/datos`. El simulador Python publica telemetría de **PC 3 a PC 5** por MQTT mediante EMQX.
 
-> **IMPORTANTE — MODO SIMULACIÓN INTEGRADO:**  
-> Esta versión opera **100% sin requerir el circuito electrónico físico conectado**, gracias a un simulador termodinámico unificado en Python (`simulador/simulador.py`) que modela las 5 zonas, los sensores (`DHT11`, `DS18B20` y sondas virtuales), el enfriamiento gradual cuando actúa el ventilador, 5 escenarios térmicos seleccionables en vivo y confirmaciones `ACK` correlacionadas por `comando_id`.
+FastAPI proyecta la temperatura a **10 minutos** mediante regresión lineal de Scikit-learn. Cada sensor y cada fuente usan su propio historial. En simulación el backend activa el ventilador si la temperatura actual o pronosticada alcanza 35 °C y dirige el servo hacia la zona prioritaria. El apagado automático se produce cuando han desaparecido las condiciones de alerta y todas las zonas simuladas con señal bajan de 32 °C. El montaje físico se gobierna con las lecturas locales del Nano.
 
 ---
 
 ## 2. Inicio Rápido
 
-### A. Levantar Backend, Simulador, Broker MQTT, MySQL y Dashboard Web (Docker)
+### A. Iniciar el dashboard en modo híbrido
+
+En `.env`, configura `OPERATION_MODE=hibrido` y `ESP32_URL=http://IP_DEL_ESP32/datos`. El monitor serie del ESP32 muestra su IP a 115200 baudios. El dashboard también permite seleccionar simulación completa o solo hardware físico.
 
 ```powershell
 docker compose up -d --build
 ```
 
-O ejecuta el script automatizado en Windows:
+- [Dashboard](http://localhost:3000)
+- [API y documentación Swagger](http://localhost:8000/docs)
+- [Consola EMQX](http://localhost:18083)
+- [phpMyAdmin](http://localhost:8085)
 
-```powershell
-.\iniciar_sistema.bat
-```
+Carga `firmware/arduino_nano/arduino_nano.ino` seleccionando Arduino Nano. Cada zona pide aire a partir de 30 °C y deja de pedirlo al llegar a 29 °C. Si ambas lo necesitan, el Nano alterna el flujo entre ellas cada 20 segundos. Los ángulos iniciales son 45° para el DS18B20 y 135° para el DHT11. Comprueba visualmente el flujo en ambos extremos y ajusta las constantes del sketch según el montaje de la paleta.
 
-- **Dashboard Web Next.js 2.0:** `http://localhost:3000`
-- **API Backend FastAPI (Swagger UI):** `http://localhost:8000/docs`
-- **Consola EMQX Broker:** `http://localhost:18083` (`admin` / `public`)
-- **phpMyAdmin:** `http://localhost:8080` (`iot_user` / `iot_password_2025`)
+El ESP32 actual publica temperaturas, humedad y estado del ventilador. El sketch en `firmware/esp32_gateway/esp32_gateway.ino` permite que el propio ESP32 también incluya la dirección de la paleta en `/datos`.
+
+En **Control → Control físico del Nano** se puede encender el ventilador, orientar la paleta entre 45° y 135° o pausar ambos actuadores por 30 segundos. El Nano confirma cada orden por USB. En pausa, D4 apaga el MOSFET y D5 deja de emitir pulsos al servo, que sigue conectado al riel de 5 V. El Nano vuelve a automático al vencer la orden o si falla un sensor.
+
+Con `NANO_PORT` y `NANO_BRIDGE_TOKEN` configurados en `.env`, el script `iniciar_sistema.bat` inicia el puente USB en segundo plano. También puedes lanzarlo con `pwsh -File .\puente_nano.ps1 -EnSegundoPlano`. La API y el dashboard se publican en la interfaz local de la PC.
+
+Para probar el enfriamiento, calienta moderadamente cada zona por separado y retira la fuente de calor. Comprueba hacia dónde dirige el aire la paleta y compara las curvas del dashboard.
+
+En **Indicadores** se consulta MAE, RMSE y R² por fuente. **Estadísticas** muestra las pruebas exploratorias sobre MQTT y el resumen histórico de los tres CSV que acompaña al artículo.
 
 ### B. Iniciar la Aplicación Móvil (React Native / Expo)
 

@@ -22,13 +22,11 @@ import {
   AlertaActiva,
   EstadoActualResponse,
   EventoControl,
-  IndicadoresResponse,
 } from "../../types/iot";
 import { OrientationRadar } from "../OrientationRadar";
 
 interface LiveMonitoringViewProps {
   estadoActual: EstadoActualResponse | null;
-  indicadores: IndicadoresResponse | null;
   eventos: EventoControl[];
   alertas: AlertaActiva[];
   chartHistory: any[];
@@ -38,12 +36,10 @@ interface LiveMonitoringViewProps {
   cardClass: string;
   subCardClass: string;
   onSelectZonaModal: (zonaId: string) => void;
-  onQuickCoolZona: (zonaId: string, angulo: number, fanOn: boolean) => void;
 }
 
 export function LiveMonitoringView({
   estadoActual,
-  indicadores,
   eventos,
   alertas,
   chartHistory,
@@ -57,15 +53,15 @@ export function LiveMonitoringView({
   const [alertasExpandidas, setAlertasExpandidas] = useState(false);
 
   const zonasEntries = estadoActual?.zonas
-    ? Object.entries(estadoActual.zonas).sort(([a], [b]) => a.localeCompare(b))
+    ? Object.entries(estadoActual.zonas).filter(([, zona]) => zona.origen !== "sin_sensor").sort(([a], [b]) => a.localeCompare(b))
     : [];
 
-  const zonasDisponibles = zonasEntries.filter(([, z]) => z.disponible !== false);
+  const zonasDisponibles = zonasEntries.filter(([, z]) => z.disponible && z.temperatura != null);
 
-  let maxTemp = 0;
-  let maxZonaNombre = "PC 1";
+  let maxTemp = -Infinity;
+  let maxZonaNombre = "";
   for (const [zKey, z] of zonasDisponibles) {
-    if (z.temperatura > maxTemp) {
+    if (z.temperatura != null && z.temperatura > maxTemp) {
       maxTemp = z.temperatura;
       maxZonaNombre = z.nombre || zKey.toUpperCase();
     }
@@ -73,9 +69,9 @@ export function LiveMonitoringView({
 
   const avgTemp =
     zonasDisponibles.length > 0
-      ? zonasDisponibles.reduce((acc, [, z]) => acc + z.temperatura, 0) /
+      ? zonasDisponibles.reduce((acc, [, z]) => acc + (z.temperatura ?? 0), 0) /
         zonasDisponibles.length
-      : 0;
+      : null;
 
   const zonaActivaId = estadoActual?.zona_objetivo_actual || "zona1";
   const zonaActivaObj = estadoActual?.zonas?.[zonaActivaId];
@@ -91,6 +87,16 @@ export function LiveMonitoringView({
       ? "real"
       : estadoActual?.modo_operacion || "simulacion";
   const hwEsp32 = estadoActual?.hardware_esp32;
+  const datosHw = hwEsp32?.datos_actuales;
+  const estadoNano = hwEsp32?.control_usb?.telemetria;
+  const hardwareVigente = hwEsp32?.conectado && datosHw && datosHw.edad >= 0 && datosHw.edad <= 15;
+  const fanFisico = estadoNano?.ventilador ?? (hardwareVigente ? datosHw.ventilador : null);
+  const fanActivo = modoSys === "real" ? fanFisico : estadoActual?.ventilador_activo;
+  const anguloFisico = estadoNano?.angulo ?? (hardwareVigente ? datosHw.angulo : null);
+  const direccionFisica = estadoNano
+    ? !estadoNano.servo_activo ? "Servo detenido" : estadoNano.manual ? "Manual" : ["Reposo", "DS18B20", "DHT11"][estadoNano.direccion]
+    : datosHw?.direccion === "dht11" ? "DHT11"
+      : datosHw?.direccion === "ds18b20" ? "DS18B20" : datosHw?.direccion === "reposo" ? "Reposo" : null;
 
   return (
     <div className="space-y-5">
@@ -152,9 +158,9 @@ export function LiveMonitoringView({
                   DS18B20 (Sonda)
                 </span>
                 <span className={`font-semibold ${textPrimary}`}>
-                  {hwEsp32?.conectado && hwEsp32?.datos_actuales?.temp != null
+                  {hardwareVigente && !datosHw.error && datosHw.temp != null
                     ? `${Number(hwEsp32.datos_actuales.temp).toFixed(1)} °C`
-                    : "DESCONECTADO"}
+                    : "Sin lectura"}
                 </span>
               </div>
               <div>
@@ -162,11 +168,11 @@ export function LiveMonitoringView({
                   DHT11 (Temp / Hum)
                 </span>
                 <span className={`font-semibold ${textPrimary}`}>
-                  {hwEsp32?.conectado && hwEsp32?.datos_actuales?.tdht != null
+                  {hardwareVigente && datosHw.tdht != null
                     ? `${Number(hwEsp32.datos_actuales.tdht).toFixed(1)} °C / ${
                         hwEsp32.datos_actuales.hum ?? "—"
                       }%`
-                    : "DESCONECTADO"}
+                    : "Sin lectura"}
                 </span>
               </div>
               <div>
@@ -182,12 +188,15 @@ export function LiveMonitoringView({
                       : textSecondary
                   }`}
                 >
-                  {hwEsp32?.conectado
-                    ? hwEsp32.datos_actuales.ventilador
+                  {fanFisico !== null
+                    ? fanFisico
                       ? "ENCENDIDO"
                       : "APAGADO"
                     : "—"}
                 </span>
+                {(estadoNano || hardwareVigente) && direccionFisica && (
+                  <span className={textMuted}> · {direccionFisica}{anguloFisico != null && ` (${anguloFisico}°)`}</span>
+                )}
               </div>
             </div>
           </div>
@@ -303,11 +312,11 @@ export function LiveMonitoringView({
                   : textPrimary
               }`}
             >
-              {maxTemp.toFixed(1)} °C
+              {Number.isFinite(maxTemp) ? `${maxTemp.toFixed(1)} °C` : "—"}
             </span>
           </div>
           <p className={`text-xs mt-1 ${textMuted}`}>
-            Registrada en {maxZonaNombre}
+            {maxZonaNombre ? `Registrada en ${maxZonaNombre}` : "Sin lecturas vigentes"}
           </p>
         </div>
 
@@ -323,11 +332,11 @@ export function LiveMonitoringView({
           </div>
           <div className="mt-2 flex items-baseline gap-1.5 font-mono">
             <span className={`text-2xl font-semibold ${textPrimary}`}>
-              {avgTemp.toFixed(1)} °C
+              {avgTemp != null ? `${avgTemp.toFixed(1)} °C` : "—"}
             </span>
           </div>
           <p className={`text-xs mt-1 ${textMuted}`}>
-            {zonasDisponibles.length} de 5 estaciones con señal
+            {zonasDisponibles.length} de {zonasEntries.length} estaciones con señal
           </p>
         </div>
 
@@ -335,11 +344,11 @@ export function LiveMonitoringView({
         <div className={`${cardClass} p-4 rounded-xl`}>
           <div className="flex items-center justify-between">
             <span className={`text-xs font-medium ${textSecondary}`}>
-              Estado del ventilador
+              Ventilador {modoSys === "real" ? "físico" : "simulado"}
             </span>
             <Fan
               className={`w-4 h-4 ${
-                estadoActual?.ventilador_activo
+                fanActivo
                   ? darkMode
                     ? "text-sky-400 animate-spin"
                     : "text-blue-600 animate-spin"
@@ -350,19 +359,18 @@ export function LiveMonitoringView({
           <div className="mt-2">
             <span
               className={`text-2xl font-semibold ${
-                estadoActual?.ventilador_activo
+                fanActivo
                   ? darkMode
                     ? "text-sky-400"
                     : "text-blue-600"
                   : textPrimary
               }`}
             >
-              {estadoActual?.ventilador_activo ? "Encendido" : "En espera"}
+              {modoSys === "real" && fanFisico === null ? "Sin lectura" : fanActivo ? "Encendido" : "En espera"}
             </span>
           </div>
           <p className={`text-xs mt-1 ${textMuted}`}>
-            Ahorro estimado:{" "}
-            {indicadores?.ahorro_energetico_estimado_pct?.toFixed(1) ?? "0.0"}%
+            {modoSys === "real" ? "Histéresis del Nano · 30 °C / 29 °C" : "Control de la simulación por MQTT"}
           </p>
         </div>
 
@@ -370,7 +378,7 @@ export function LiveMonitoringView({
         <div className={`${cardClass} p-4 rounded-xl`}>
           <div className="flex items-center justify-between">
             <span className={`text-xs font-medium ${textSecondary}`}>
-              Zona activa
+              {modoSys === "real" ? "Dirección de la paleta" : "Zona simulada atendida"}
             </span>
             <Compass
               className={`w-4 h-4 ${
@@ -380,14 +388,16 @@ export function LiveMonitoringView({
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className={`text-2xl font-semibold ${textPrimary}`}>
-              {zonaActivaLabel}
+              {modoSys === "real" ? ((estadoNano || hardwareVigente) && direccionFisica) || "—" : fanActivo ? zonaActivaLabel : "En espera"}
             </span>
             <span className={`text-sm font-mono font-medium ${textSecondary}`}>
-              ({estadoActual?.ultimo_angulo_servo ?? 90}°)
+              {modoSys === "real"
+                ? anguloFisico != null && `${anguloFisico}°`
+                : fanActivo && `${estadoActual?.ultimo_angulo_servo ?? 90}°`}
             </span>
           </div>
           <p className={`text-xs mt-1 ${textMuted}`}>
-            Orientación simulada del servomotor
+            {modoSys === "real" ? "Ángulo reportado por el Nano" : "Orientación del servomotor en el simulador"}
           </p>
         </div>
       </div>
@@ -402,7 +412,7 @@ export function LiveMonitoringView({
                 Evolución térmica y proyección (+10 min)
               </h2>
               <p className={`text-xs mt-0.5 ${textSecondary}`}>
-                Temperatura observada frente a predicción lineal y umbral crítico (35.0 °C)
+                {estadoActual?.zonas[zonaSeleccionadaChart]?.origen === "real" ? "Sensor físico" : "Telemetría MQTT"} · Scikit-learn · Umbral crítico 35 °C
               </p>
             </div>
 
@@ -413,7 +423,7 @@ export function LiveMonitoringView({
                   : "bg-slate-100 border-slate-200"
               }`}
             >
-              {["zona1", "zona2", "zona3", "zona4", "zona5"].map((z, idx) => {
+              {zonasEntries.map(([z, zona]) => {
                 const active = zonaSeleccionadaChart === z;
                 return (
                   <button
@@ -427,7 +437,7 @@ export function LiveMonitoringView({
                         : textSecondary
                     }`}
                   >
-                    PC {idx + 1}
+                    {zona.nombre}
                   </button>
                 );
               })}
@@ -521,7 +531,7 @@ export function LiveMonitoringView({
           <div>
             <div className="flex items-center justify-between mb-3">
               <h2 className={`text-sm font-semibold ${textPrimary}`}>
-                Computadoras (5 zonas)
+                Computadoras ({zonasEntries.length} zonas)
               </h2>
               <span className={`text-xs ${textMuted}`}>
                 Clic para detalles
@@ -530,14 +540,15 @@ export function LiveMonitoringView({
 
             <div className="space-y-2.5">
               {zonasEntries.map(([zKey, zData]) => {
-                const sinSenal = zData.disponible === false;
-                const isCrit = !sinSenal && zData.temperatura >= 35.0;
+                const temperatura = zData.disponible ? zData.temperatura : null;
+                const sinSenal = temperatura == null;
+                const isCrit = temperatura != null && temperatura >= 35.0;
                 const isWarn =
                   !sinSenal &&
                   !isCrit &&
-                  (zData.temperatura >= 33.0 || zData.prediccion_10m >= 35.0);
+                  ((temperatura ?? -Infinity) >= 33.0 || (zData.prediccion_10m ?? -Infinity) >= 35.0);
                 const isCoolingHere =
-                  estadoActual?.ventilador_activo &&
+                  zData.origen === "virtual" && estadoActual?.ventilador_activo &&
                   estadoActual?.zona_objetivo_actual === zKey;
 
                 let badgeClass = darkMode
@@ -598,9 +609,9 @@ export function LiveMonitoringView({
                             ? "SIN SENSOR"
                             : "SIMULADA"}
                         </span>
-                        <span className={`text-xs font-mono ${textMuted}`}>
+                        {zData.origen === "virtual" && <span className={`text-xs font-mono ${textMuted}`}>
                           {zData.angulo_servo}°
-                        </span>
+                        </span>}
                         {isCoolingHere && (
                           <Fan
                             className={`w-3.5 h-3.5 animate-spin ${
@@ -622,13 +633,18 @@ export function LiveMonitoringView({
                           ? `${zData.sensor}${
                               zData.humedad != null ? ` • Hum: ${zData.humedad}%` : ""
                             }`
-                          : `Proyección +10m: ${zData.prediccion_10m.toFixed(1)} °C`}
+                          : zData.sensor}
                       </p>
+                      {!sinSenal && (
+                        <p className={`mt-1 text-xs ${textMuted}`}>
+                          {zData.prediccion_10m == null ? "Predicción en preparación" : `Pronóstico +10 min · ${zData.prediccion_10m.toFixed(1)} °C`}
+                        </p>
+                      )}
                     </div>
 
                     <div className="text-right shrink-0">
                       <div className={`text-base font-semibold font-mono ${textPrimary}`}>
-                        {sinSenal ? "—" : `${zData.temperatura.toFixed(1)} °C`}
+                        {temperatura == null ? "—" : `${temperatura.toFixed(1)} °C`}
                       </div>
                       <span
                         className={`inline-block mt-0.5 px-2 py-0.5 rounded text-[11px] font-medium ${badgeClass}`}
@@ -645,6 +661,7 @@ export function LiveMonitoringView({
       </div>
 
       {/* Zona inferior: Visualización compacta del radar + Historial de actividad reciente */}
+      {modoSys !== "real" && (
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* Radar compacto (5 columnas) */}
         <div className={`lg:col-span-5 ${cardClass} rounded-xl p-5 flex flex-col justify-between`}>
@@ -771,6 +788,7 @@ export function LiveMonitoringView({
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

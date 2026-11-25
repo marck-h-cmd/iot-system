@@ -3,11 +3,13 @@ import { CheckCircle2, AlertCircle, Clock, ChevronDown, ChevronUp } from "lucide
 import {
   IndicadoresDetalladosResponse,
   IndicadoresResponse,
+  EvaluacionModelo,
 } from "../../types/iot";
 
 interface IndicatorsViewProps {
   indicadores: IndicadoresResponse | null;
   indicadoresDetallados: IndicadoresDetalladosResponse | null;
+  modelos: EvaluacionModelo[];
   darkMode: boolean;
   cardClass: string;
   subCardClass: string;
@@ -16,6 +18,7 @@ interface IndicatorsViewProps {
 export function IndicatorsView({
   indicadores,
   indicadoresDetallados,
+  modelos,
   darkMode,
   cardClass,
   subCardClass,
@@ -38,6 +41,31 @@ export function IndicatorsView({
 
   return (
     <div className="space-y-5">
+      <section className={`${cardClass} rounded-xl p-5`} aria-labelledby="evaluacion-modelo">
+        <h2 id="evaluacion-modelo" className={`font-semibold ${textPrimary}`}>Evaluación del pronóstico a 10 minutos</h2>
+        <p className={`mt-1 text-xs ${textSecondary}`}>Regresión lineal en Scikit-learn. Cada pronóstico se compara con una lectura posterior de la misma zona y del mismo origen.</p>
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[430px] text-left text-sm">
+            <thead className={`border-b border-slate-500/25 text-xs ${textMuted}`}>
+              <tr>{["Fuente", "Pares", "MAE (°C)", "RMSE (°C)", "R²"].map((campo) => <th key={campo} scope="col" className="p-2">{campo}</th>)}</tr>
+            </thead>
+            <tbody>
+              {modelos.map((modelo) => (
+                <tr key={modelo.origen} className="border-b border-slate-500/15">
+                  <th scope="row" className="p-2 font-medium">{modelo.origen === "real" ? "Sensores físicos" : "Simulación MQTT"}</th>
+                  <td className="p-2 tabular-nums">{modelo.muestras_evaluadas}</td>
+                  {[modelo.mae, modelo.rmse, modelo.r2].map((valor, indice) => (
+                    <td key={indice} className="p-2 tabular-nums">{valor == null ? "—" : valor.toFixed(3)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {modelos.some((m) => m.muestras_evaluadas === 0) && (
+          <p className={`mt-3 text-xs ${textMuted}`}>Esperando lecturas para evaluar los pronósticos con el desfase completo de 10 minutos.</p>
+        )}
+      </section>
       {/* Resumen compacto superior */}
       <div className={`${cardClass} rounded-xl p-4 flex flex-wrap items-center justify-between gap-4`}>
         <div>
@@ -45,7 +73,7 @@ export function IndicatorsView({
             Resumen de indicadores operacionales
           </h2>
           <p className={`text-xs mt-0.5 ${textSecondary}`}>
-            8 indicadores distribuidos en 4 dimensiones • Datos en modo simulación
+            8 indicadores calculados con telemetría y órdenes del simulador MQTT
           </p>
         </div>
 

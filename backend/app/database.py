@@ -250,15 +250,17 @@ class DatabaseManager:
         except Error:
             return 0
 
-    def obtener_telemetria_actual(self) -> List[Dict[str, Any]]:
+    def obtener_telemetria_actual(self, origen: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retorna el último valor registrado para cada una de las 5 zonas"""
-        sql = """
+        filtro_origen = "WHERE origen = %s" if origen else ""
+        sql = f"""
             SELECT r.id, r.msg_id, r.zona, r.temperatura_actual, r.temperatura_predicha, 
                    r.estado_ventilador, r.angulo_servo, r.origen, r.timestamp_origen, r.timestamp
             FROM registro_termico r
             INNER JOIN (
                 SELECT zona, MAX(id) as max_id
                 FROM registro_termico
+                {filtro_origen}
                 GROUP BY zona
             ) ult ON r.id = ult.max_id
             ORDER BY r.zona ASC
@@ -266,7 +268,7 @@ class DatabaseManager:
         try:
             conn = self.get_connection()
             cursor = conn.cursor(dictionary=True)
-            cursor.execute(sql)
+            cursor.execute(sql, (origen,) if origen else ())
             filas = cursor.fetchall()
             cursor.close()
             conn.close()
@@ -278,28 +280,27 @@ class DatabaseManager:
             logger.error(f"Error obteniendo telemetría actual: {e}")
             return []
 
-    def obtener_historial_zona(self, zona: Optional[str] = None, limit: int = 60) -> List[Dict[str, Any]]:
+    def obtener_historial_zona(self, zona: Optional[str] = None, limit: int = 60,
+                               origen: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retorna series de tiempo para gráficos de temperatura actual vs predicha"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor(dictionary=True)
+            filtros, params = [], []
             if zona and zona.lower() != "todas":
-                sql = """
-                    SELECT id, msg_id, zona, temperatura_actual, temperatura_predicha, 
-                           estado_ventilador, angulo_servo, origen, timestamp_origen, timestamp
-                    FROM registro_termico
-                    WHERE zona = %s
-                    ORDER BY id DESC LIMIT %s
-                """
-                cursor.execute(sql, (zona, limit))
-            else:
-                sql = """
-                    SELECT id, msg_id, zona, temperatura_actual, temperatura_predicha, 
-                           estado_ventilador, angulo_servo, origen, timestamp_origen, timestamp
-                    FROM registro_termico
-                    ORDER BY id DESC LIMIT %s
-                """
-                cursor.execute(sql, (limit,))
+                filtros.append("zona = %s")
+                params.append(zona)
+            if origen:
+                filtros.append("origen = %s")
+                params.append(origen)
+            where = "WHERE " + " AND ".join(filtros) if filtros else ""
+            cursor.execute(f"""
+                SELECT id, msg_id, zona, temperatura_actual, temperatura_predicha,
+                       estado_ventilador, angulo_servo, origen, timestamp_origen, timestamp
+                FROM registro_termico
+                {where}
+                ORDER BY id DESC LIMIT %s
+            """, (*params, limit))
             filas = cursor.fetchall()
             cursor.close()
             conn.close()
@@ -356,7 +357,8 @@ class DatabaseManager:
             logger.error(f"Error obteniendo eventos de control: {e}")
             return []
 
-    def obtener_pares_para_metricas(self, zona: Optional[str] = None, ventana_segundos: int = 600, tolerancia: int = 30) -> List[Tuple[float, float]]:
+    def obtener_pares_para_metricas(self, zona: Optional[str] = None, ventana_segundos: int = 600,
+                                   tolerancia: int = 30, origen: str = "virtual") -> List[Tuple[float, float]]:
         """
         DIMENSIÓN 2: Busca pares únicos (1 a 1) de (temperatura_predicha en T, temperatura_actual en T + 10 min).
         Evita emparejamientos múltiples usando una ventana estrecha o subconsulta de emparejamiento más cercano.
@@ -367,25 +369,42 @@ class DatabaseManager:
             cursor = conn.cursor(dictionary=True)
             filtro_zona = "AND p.zona = %s" if (zona and zona.lower() != "todas") else ""
             sql = f"""
-                SELECT p.id AS id_pred, p.temperatura_predicha AS pred,
-                       SUBSTRING_INDEX(
-                           GROUP_CONCAT(r.temperatura_actual ORDER BY ABS(TIMESTAMPDIFF(SECOND, p.timestamp, r.timestamp) - %s) ASC),
-                           ',', 1
-                       ) AS real_val
-                FROM registro_termico p
-                JOIN registro_termico r 
-                  ON p.zona = r.zona
-                 AND r.id > p.id
-                 AND TIMESTAMPDIFF(SECOND, p.timestamp, r.timestamp) BETWEEN %s AND %s
-                WHERE p.temperatura_predicha IS NOT NULL
-                  {filtro_zona}
-                GROUP BY p.id, p.temperatura_predicha
-                ORDER BY p.id DESC
-                LIMIT 120
+                WITH predicciones AS (
+                    SELECT p.id, p.zona, p.origen, p.temperatura_predicha, p.timestamp
+                    FROM registro_termico p
+                    WHERE p.origen = %s AND p.temperatura_predicha IS NOT NULL
+                      AND p.timestamp <= NOW() - INTERVAL %s SECOND
+                      {filtro_zona}
+                      AND EXISTS (
+                        SELECT 1 FROM registro_termico r
+                        WHERE r.zona = p.zona AND r.origen = p.origen
+                          AND r.timestamp BETWEEN p.timestamp + INTERVAL %s SECOND
+                                              AND p.timestamp + INTERVAL %s SECOND
+                      )
+                    ORDER BY p.id DESC LIMIT 240
+                ), candidatos AS (
+                    SELECT p.id AS id_pred, r.id AS id_obs, p.temperatura_predicha AS pred,
+                           r.temperatura_actual AS real_val,
+                           ABS(TIMESTAMPDIFF(SECOND, p.timestamp, r.timestamp) - %s) AS distancia
+                    FROM predicciones p
+                    JOIN registro_termico r
+                      ON p.zona = r.zona AND p.origen = r.origen
+                     AND r.timestamp BETWEEN p.timestamp + INTERVAL %s SECOND
+                                         AND p.timestamp + INTERVAL %s SECOND
+                ), cercanos AS (
+                    SELECT *, ROW_NUMBER() OVER (PARTITION BY id_pred ORDER BY distancia, id_obs) AS fila
+                    FROM candidatos
+                ), unicos AS (
+                    SELECT *, ROW_NUMBER() OVER (PARTITION BY id_obs ORDER BY distancia, id_pred DESC) AS uso
+                    FROM cercanos WHERE fila = 1
+                )
+                SELECT pred, real_val FROM unicos WHERE uso = 1 ORDER BY id_pred DESC LIMIT 120
             """
-            params = [ventana_segundos, ventana_segundos - tolerancia, ventana_segundos + tolerancia]
-            if zona and zona.lower() != "todas":
+            params = [origen, ventana_segundos]
+            if filtro_zona:
                 params.append(zona)
+            minimo, maximo = ventana_segundos - tolerancia, ventana_segundos + tolerancia
+            params.extend((minimo, maximo, ventana_segundos, minimo, maximo))
 
             cursor.execute(sql, tuple(params))
             for fila in cursor.fetchall():
@@ -401,7 +420,7 @@ class DatabaseManager:
     def obtener_resumen_indicadores(self) -> Dict[str, Any]:
         """Calcula el consolidado de las 4 dimensiones de la investigación a partir de datos reales en BD"""
         resumen = {
-            "modo_datos": settings.OPERATION_MODE,
+            "modo_datos": "simulacion",
             "dimension_1": {"intervalo_adquisicion_seg": None, "tasa_entrega_pct": None, "total_mensajes": 0},
             "dimension_2": {"mae": None, "rmse": None, "r2": None, "muestras": 0},
             "dimension_3": {"exactitud_seleccion_pct": None, "latencia_promedio_ms": None, "tasa_ack_pct": None, "total_eventos": 0},
@@ -412,7 +431,7 @@ class DatabaseManager:
             cursor = conn.cursor(dictionary=True)
 
             # Dimensión 1: Total registros y cálculo de intervalo real sobre timestamp_origen
-            cursor.execute("SELECT COUNT(*) AS total FROM registro_termico")
+            cursor.execute("SELECT COUNT(*) AS total FROM registro_termico WHERE origen = 'virtual'")
             res_total = cursor.fetchone()
             total_reg = int(res_total["total"]) if res_total and res_total["total"] else 0
             resumen["dimension_1"]["total_mensajes"] = total_reg
@@ -425,7 +444,7 @@ class DatabaseManager:
                         FROM (
                             SELECT id, zona, timestamp_origen
                             FROM registro_termico
-                            WHERE timestamp_origen IS NOT NULL
+                            WHERE origen = 'virtual' AND timestamp_origen IS NOT NULL
                             ORDER BY id DESC
                             LIMIT 150
                         ) recientes
@@ -435,10 +454,8 @@ class DatabaseManager:
                 row_int = cursor.fetchone()
                 if row_int and row_int["intervalo_prom"] is not None:
                     resumen["dimension_1"]["intervalo_adquisicion_seg"] = round(float(row_int["intervalo_prom"]), 2)
-                    resumen["dimension_1"]["desviacion_intervalo_seg"] = round(float(row_int["intervalo_std"] or 0.08), 3)
-                else:
-                    resumen["dimension_1"]["intervalo_adquisicion_seg"] = 5.0
-                resumen["dimension_1"]["tasa_entrega_pct"] = 100.0
+                    if row_int["intervalo_std"] is not None:
+                        resumen["dimension_1"]["desviacion_intervalo_seg"] = round(float(row_int["intervalo_std"]), 3)
 
             # Dimensión 3: Latencia promedio y tasa de ACKs reales en la BD (sin números mágicos)
             cursor.execute("""
@@ -447,6 +464,7 @@ class DatabaseManager:
                     SUM(CASE WHEN ack_recibido = 1 THEN 1 ELSE 0 END) as acks_ok,
                     AVG(CASE WHEN ack_recibido = 1 AND latencia_ms IS NOT NULL THEN latencia_ms ELSE NULL END) as lat_prom
                 FROM control_eventos
+                WHERE origen_ejecucion = 'simulacion'
             """)
             row_ctrl = cursor.fetchone()
             if row_ctrl and row_ctrl["total_eventos"] and int(row_ctrl["total_eventos"]) > 0:
@@ -456,42 +474,20 @@ class DatabaseManager:
                 resumen["dimension_3"]["tasa_ack_pct"] = round((acks / total_ev) * 100.0, 1)
                 if row_ctrl["lat_prom"] is not None:
                     resumen["dimension_3"]["latencia_promedio_ms"] = round(float(row_ctrl["lat_prom"]), 2)
-                resumen["dimension_3"]["exactitud_seleccion_pct"] = 100.0
-
-            # Dimensión 4: Fracción de tiempo con ventilador encendido (corregida por número de zonas) y Delta térmico por zona
+            # La fracción de lecturas con ventilador activo es una aproximación, no una medición de energía.
             cursor.execute("""
                 SELECT 
                     COUNT(*) as total_filas,
-                    COUNT(DISTINCT zona) as num_zonas,
                     SUM(CASE WHEN estado_ventilador = 1 THEN 1 ELSE 0 END) as fan_on
                 FROM registro_termico
-                WHERE timestamp >= NOW() - INTERVAL 1 HOUR
+                WHERE origen = 'virtual' AND timestamp >= NOW() - INTERVAL 1 HOUR
             """)
             row_dim4 = cursor.fetchone()
             if row_dim4 and row_dim4["total_filas"] and int(row_dim4["total_filas"]) > 0:
                 total_f = float(row_dim4["total_filas"])
-                num_z = max(1.0, float(row_dim4["num_zonas"] or 5.0))
                 fan_on_count = float(row_dim4["fan_on"] or 0.0)
                 fraccion = (fan_on_count / total_f) * 100.0
-                resumen["dimension_4"]["fraccion_tiempo_fan_pct"] = round(fraccion, 1)
-                # Cada ciclo de 5s inserta num_zonas filas; dividimos entre num_zonas para obtener los minutos reales
-                ciclos_fan_on = fan_on_count / num_z
-                resumen["dimension_4"]["minutos_fan_on"] = round((ciclos_fan_on * 5.0) / 60.0, 2)
-
-            # Calcular el promedio del Delta térmico (MAX - MIN) en zonas que estuvieron bajo refrigeración activa
-            cursor.execute("""
-                SELECT AVG(delta_z) AS delta_prom
-                FROM (
-                    SELECT zona, (MAX(temperatura_actual) - MIN(temperatura_actual)) AS delta_z
-                    FROM registro_termico
-                    WHERE timestamp >= NOW() - INTERVAL 1 HOUR
-                    GROUP BY zona
-                    HAVING SUM(CASE WHEN estado_ventilador = 1 THEN 1 ELSE 0 END) > 0
-                ) dz
-            """)
-            row_dt = cursor.fetchone()
-            if row_dt and row_dt["delta_prom"] is not None:
-                resumen["dimension_4"]["delta_termico_c"] = round(float(row_dt["delta_prom"]), 2)
+                resumen["dimension_4"]["fraccion_lecturas_fan_pct"] = round(fraccion, 1)
 
             cursor.close()
             conn.close()

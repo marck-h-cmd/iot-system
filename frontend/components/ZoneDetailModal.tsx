@@ -44,8 +44,6 @@ export function ZoneDetailModal({
       .then((data) => {
         if (!mounted) return;
         const series = (data.historial || [])
-          .slice()
-          .reverse()
           .map((item: any) => ({
             hora: item.fecha_registro
               ? new Date(item.fecha_registro).toLocaleTimeString([], {
@@ -55,7 +53,7 @@ export function ZoneDetailModal({
                 })
               : "",
             temperatura: Number(item.temperatura),
-            prediccion: Number(item.prediccion_10m || item.temperatura),
+            prediccion: item.prediccion_10m,
           }));
         setHistorialZona(series);
         setEventosZona(data.eventos_recientes || []);
@@ -67,11 +65,12 @@ export function ZoneDetailModal({
     return () => {
       mounted = false;
     };
-  }, [zonaId]);
+  }, [zonaId, zonaEstado?.origen]);
 
   if (!zonaId || !zonaEstado) return null;
 
-  const isCoolingHere = ventiladorActivo && zonaObjetivoActual === zonaId;
+  const esSimulada = zonaEstado.origen === "virtual";
+  const isCoolingHere = esSimulada && ventiladorActivo && zonaObjetivoActual === zonaId;
   const angulo = zonaEstado.angulo_servo ?? 0;
   const textSecondary = darkMode ? "text-slate-300" : "text-slate-600";
   const subBox = darkMode
@@ -98,7 +97,7 @@ export function ZoneDetailModal({
                     : "bg-slate-100 text-slate-700"
                 }`}
               >
-                {angulo}° • Simulación
+                {esSimulada ? `${angulo}° · Simulación` : "Sensor físico"}
               </span>
             </div>
             <p className={`text-xs mt-1 ${textSecondary}`}>
@@ -123,20 +122,20 @@ export function ZoneDetailModal({
           <div className={`p-3.5 rounded-lg border ${subBox}`}>
             <span className={`text-xs ${textSecondary}`}>Temperatura actual</span>
             <p className="text-xl font-semibold font-mono mt-1">
-              {zonaEstado.disponible ? `${zonaEstado.temperatura.toFixed(1)} °C` : "Sin señal"}
+              {zonaEstado.disponible && zonaEstado.temperatura != null ? `${zonaEstado.temperatura.toFixed(1)} °C` : "Sin señal"}
             </p>
           </div>
 
           <div className={`p-3.5 rounded-lg border ${subBox}`}>
             <span className={`text-xs ${textSecondary}`}>Proyección +10 min</span>
             <p className="text-xl font-semibold font-mono mt-1">
-              {zonaEstado.disponible ? `${zonaEstado.prediccion_10m.toFixed(1)} °C` : "—"}
+              {zonaEstado.disponible && zonaEstado.prediccion_10m != null ? `${zonaEstado.prediccion_10m.toFixed(1)} °C` : "—"}
             </p>
           </div>
 
           <div className={`p-3.5 rounded-lg border ${subBox}`}>
-            <span className={`text-xs ${textSecondary}`}>Orientación servo</span>
-            <p className="text-xl font-semibold font-mono mt-1">{angulo}°</p>
+            <span className={`text-xs ${textSecondary}`}>{esSimulada ? "Ángulo objetivo" : "Umbrales del Nano"}</span>
+            <p className="text-xl font-semibold font-mono mt-1">{esSimulada ? `${angulo}°` : "30 / 29 °C"}</p>
           </div>
         </div>
 
@@ -204,6 +203,7 @@ export function ZoneDetailModal({
         </div>
 
         {/* Control rápido de la estación */}
+        {esSimulada && (
         <div className={`flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-lg border ${subBox}`}>
           <div>
             <p className="text-xs font-medium">Acción sobre esta computadora (Simulación)</p>
@@ -237,6 +237,7 @@ export function ZoneDetailModal({
             )}
           </div>
         </div>
+        )}
 
         {eventosZona.length > 0 && (
           <div className="mt-4">

@@ -8,7 +8,8 @@ from typing import Dict, Any, Optional
 
 from app.config import settings
 from app.database import db_manager
-from app.ml_model import ml_predictor
+from app.ml_model import LinearRegressionPredictor
+from app.control_nano import control_nano
 
 logger = logging.getLogger("backend.esp32_client")
 
@@ -51,8 +52,8 @@ class ESP32ClientService:
             "error": False,
             "edad": -1
         }
-        self.ultima_telemetria_procesada: Dict[str, Any] = {}
-        self._ultimo_hash_insertado: Optional[str] = None
+        self.predictor = LinearRegressionPredictor()
+        self.predicciones: Dict[str, Optional[float]] = {}
         self._ultimo_ts_insercion: float = 0.0
 
     def iniciar(self):
@@ -76,6 +77,7 @@ class ESP32ClientService:
                                 mapping_ds18b20: Optional[str] = None,
                                 mapping_dht11: Optional[str] = None) -> Dict[str, Any]:
         with self._lock:
+            origen_anterior = (self.esp32_url, self.mapping_ds18b20, self.mapping_dht11)
             if url:
                 clean_url = url.strip()
                 if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
@@ -89,6 +91,9 @@ class ESP32ClientService:
                 self.mapping_ds18b20 = mapping_ds18b20
             if mapping_dht11 and mapping_dht11 in settings.ZONAS_METADATOS:
                 self.mapping_dht11 = mapping_dht11
+            if origen_anterior != (self.esp32_url, self.mapping_ds18b20, self.mapping_dht11):
+                self.predictor.reiniciar_historial()
+                self.predicciones.clear()
 
             return self.obtener_estado()
 
@@ -139,7 +144,11 @@ class ESP32ClientService:
         """Valida rigurosamente los campos del contrato del firmware real"""
         with self._lock:
             self.conectado = True
-            self.ultimo_exito_ts = time.time()
+            ahora = time.time()
+            if ahora - self.ultimo_exito_ts > 30:
+                self.predictor.reiniciar_historial()
+                self.predicciones.clear()
+            self.ultimo_exito_ts = ahora
             self.total_exitosos += 1
             self.ultimo_error_msg = None
 
@@ -150,14 +159,20 @@ class ESP32ClientService:
             fan = bool(d.get("ventilador", False))
             error_ds = bool(d.get("error", False))
             edad = int(d.get("edad", -1))
-            angulo = int(d.get("angulo", 90))
+            angulo = d.get("angulo")
+            if type(angulo) is not int or not 0 <= angulo <= 180:
+                angulo = None
+            direccion = d.get("direccion")
+            if direccion not in ("ds18b20", "dht11", "reposo"):
+                direccion = None
             modo_hardware = str(d.get("modo", "autonomo"))
+            trama_vigente = 0 <= edad <= 15
 
             # Determinar estado cualitativo del enlace
-            if error_ds or temp_ds is None:
-                self.estado_enlace = "ERROR_SENSOR"
-            elif edad > 15 or edad < 0:
+            if not trama_vigente:
                 self.estado_enlace = "TELEMETRIA_ANTIGUA"
+            elif error_ds or temp_ds is None or temp_dht is None:
+                self.estado_enlace = "ERROR_SENSOR"
             else:
                 self.estado_enlace = "CONECTADO"
 
@@ -168,13 +183,27 @@ class ESP32ClientService:
                 "ventilador": fan,
                 "error": error_ds,
                 "edad": edad,
-                "angulo": angulo,
+                "direccion": direccion,
                 "modo_hardware": modo_hardware,
                 "timestamp_lectura": self.ultimo_exito_ts
             }
+            if angulo is not None:
+                self.datos_crudos["angulo"] = angulo
 
-        # Persistir en base de datos de manera controlada (evitar duplicados o sobrecarga)
-        self._persistir_mediciones_reales(temp_ds, temp_dht, hum, fan, angulo)
+            if not trama_vigente:
+                self.predictor.reiniciar_historial()
+                self.predicciones.clear()
+            elif ahora - self._ultimo_ts_insercion >= 3.0:
+                self._ultimo_ts_insercion = ahora
+                mediciones = self._preparar_mediciones(
+                    None if error_ds else temp_ds, temp_dht, fan, angulo, ahora - edad
+                )
+            else:
+                mediciones = []
+
+        if trama_vigente:
+            for medicion in mediciones:
+                db_manager.insertar_registro_termico(medicion)
 
     def _marcar_fallo(self, mensaje_error: str):
         with self._lock:
@@ -184,53 +213,32 @@ class ESP32ClientService:
             self.estado_enlace = "DESCONECTADO"
             logger.debug(f"⚠️ [ESP32 Client] {mensaje_error} ({self.esp32_url})")
 
-    def _persistir_mediciones_reales(self, temp_ds: Optional[float], temp_dht: Optional[float],
-                                     hum: Optional[float], fan: bool, angulo: int):
-        ahora = time.time()
-        # Solo almacenar en BD como máximo cada 3 segundos para evitar saturación en MySQL
-        if ahora - self._ultimo_ts_insercion < 3.0:
-            return
-
-        fan_int = 1 if fan else 0
-        ts_str = time.strftime("%Y-%m-%d %H:%M:%S")
-
-        # 1. Registro para DS18B20 (mapeado a la zona configurada, por defecto zona2)
-        if temp_ds is not None and not self.datos_crudos["error"] and self.estado_enlace == "CONECTADO":
-            pred_ds = ml_predictor.predecir_futuro(
-                self.mapping_ds18b20, temp_ds,
+    def _preparar_mediciones(self, temp_ds: Optional[float], temp_dht: Optional[float],
+                            fan: bool, angulo: Optional[int], timestamp: float):
+        mediciones = []
+        for zona, temperatura in ((self.mapping_ds18b20, temp_ds), (self.mapping_dht11, temp_dht)):
+            if temperatura is None:
+                self.predicciones.pop(zona, None)
+                self.predictor.historial_zonas[zona].clear()
+                continue
+            prediccion = self.predictor.predecir_futuro(
+                zona, temperatura,
                 horizonte_segundos=settings.VENTANA_PREDICCION_SEGUNDOS,
-                timestamp=ahora
+                timestamp=timestamp,
+                permitir_estimacion_inicial=False,
             )
-            db_manager.insertar_registro_termico({
-                "msg_id": int(ahora),
-                "zona": self.mapping_ds18b20,
-                "temperatura_actual": round(temp_ds, 2),
-                "temperatura_predicha": round(pred_ds, 2),
-                "estado_ventilador": fan_int,
-                "angulo_servo": angulo,
+            self.predicciones[zona] = prediccion
+            mediciones.append({
+                "msg_id": int(timestamp),
+                "zona": zona,
+                "temperatura_actual": round(temperatura, 2),
+                "temperatura_predicha": prediccion,
+                "estado_ventilador": int(fan),
+                "angulo_servo": angulo if angulo is not None else 90,
                 "origen": "real",
-                "timestamp_origen": ahora
+                "timestamp_origen": timestamp,
             })
-
-        # 2. Registro para DHT11 (mapeado a la zona configurada, por defecto zona1)
-        if temp_dht is not None and self.estado_enlace == "CONECTADO":
-            pred_dht = ml_predictor.predecir_futuro(
-                self.mapping_dht11, temp_dht,
-                horizonte_segundos=settings.VENTANA_PREDICCION_SEGUNDOS,
-                timestamp=ahora
-            )
-            db_manager.insertar_registro_termico({
-                "msg_id": int(ahora),
-                "zona": self.mapping_dht11,
-                "temperatura_actual": round(temp_dht, 2),
-                "temperatura_predicha": round(pred_dht, 2),
-                "estado_ventilador": fan_int,
-                "angulo_servo": angulo,
-                "origen": "real",
-                "timestamp_origen": ahora
-            })
-
-        self._ultimo_ts_insercion = ahora
+        return mediciones
 
     def obtener_estado(self) -> Dict[str, Any]:
         with self._lock:
@@ -253,7 +261,8 @@ class ESP32ClientService:
                     "ds18b20": self.mapping_ds18b20,
                     "dht11": self.mapping_dht11
                 },
-                "datos_actuales": dict(self.datos_crudos)
+                "datos_actuales": dict(self.datos_crudos),
+                "control_usb": control_nano.estado(),
             }
 
     def obtener_lecturas_para_zonas(self) -> Dict[str, Dict[str, Any]]:
@@ -309,10 +318,6 @@ class ESP32ClientService:
             # Zona DHT11
             meta_dht = settings.ZONAS_METADATOS.get(self.mapping_dht11, {})
             if t_dht is not None and not es_antigua:
-                pred_dht = ml_predictor.predecir_futuro(
-                    self.mapping_dht11, t_dht,
-                    horizonte_segundos=settings.VENTANA_PREDICCION_SEGUNDOS
-                )
                 lecturas[self.mapping_dht11] = {
                     "zona": self.mapping_dht11,
                     "nombre": meta_dht.get("nombre", "PC 1"),
@@ -320,7 +325,7 @@ class ESP32ClientService:
                     "sensor": "DHT11 Físico (Temp + Humedad)",
                     "angulo_servo_zona": meta_dht.get("angulo", 20),
                     "temperatura_actual": t_dht,
-                    "temperatura_predicha": pred_dht,
+                    "temperatura_predicha": self.predicciones.get(self.mapping_dht11),
                     "ultima_temperatura_valida": t_dht,
                     "humedad": hum_dht,
                     "origen": "real",
@@ -360,10 +365,6 @@ class ESP32ClientService:
             # Zona DS18B20
             meta_ds = settings.ZONAS_METADATOS.get(self.mapping_ds18b20, {})
             if t_ds is not None and not err_ds and not es_antigua:
-                pred_ds = ml_predictor.predecir_futuro(
-                    self.mapping_ds18b20, t_ds,
-                    horizonte_segundos=settings.VENTANA_PREDICCION_SEGUNDOS
-                )
                 lecturas[self.mapping_ds18b20] = {
                     "zona": self.mapping_ds18b20,
                     "nombre": meta_ds.get("nombre", "PC 2"),
@@ -371,9 +372,9 @@ class ESP32ClientService:
                     "sensor": "DS18B20 1-Wire Físico",
                     "angulo_servo_zona": meta_ds.get("angulo", 55),
                     "temperatura_actual": t_ds,
-                    "temperatura_predicha": pred_ds,
+                    "temperatura_predicha": self.predicciones.get(self.mapping_ds18b20),
                     "ultima_temperatura_valida": t_ds,
-                    "humedad": hum_dht,
+                    "humedad": None,
                     "origen": "real",
                     "modo_simulacion": False,
                     "estado_ventilador": 1 if fan else 0,
@@ -396,7 +397,7 @@ class ESP32ClientService:
                     "temperatura_actual": None,
                     "temperatura_predicha": None,
                     "ultima_temperatura_valida": t_ds,
-                    "humedad": hum_dht if not es_antigua else None,
+                    "humedad": None,
                     "origen": "real",
                     "modo_simulacion": False,
                     "estado_ventilador": 1 if fan else 0,

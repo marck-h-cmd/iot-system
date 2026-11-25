@@ -22,6 +22,8 @@ WebServer servidor(80);
 
 float tempDS = -999.0, tempDHT = -999.0, humedad = -999.0;
 bool ventilador = false, errorSensor = false;
+int angulo = -1;
+const char* direccion = nullptr;
 bool hayDatos = false;
 unsigned long ultimoDato = 0;
 String linea = "";
@@ -37,6 +39,7 @@ const char PAGINA[] PROGMEM = R"rawliteral(
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 480px; margin: 24px auto; padding: 0 16px; background: #0B1220; color: #F8FAFC; }
   h1 { font-size: 1.2rem; border-bottom: 1px solid #334155; padding-bottom: 8px; }
   .fila { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #1E293B; font-size: 0.95rem; }
+  .fila[hidden] { display: none; }
   .valor { font-weight: 700; color: #38BDF8; }
   #estado { margin-top: 16px; font-size: 0.85rem; color: #94A3B8; }
 </style>
@@ -47,6 +50,7 @@ const char PAGINA[] PROGMEM = R"rawliteral(
 <div class="fila"><span>Temperatura DHT11</span><span class="valor" id="tdht">--</span></div>
 <div class="fila"><span>Humedad DHT11</span><span class="valor" id="hum">--</span></div>
 <div class="fila"><span>Ventilador</span><span class="valor" id="fan">--</span></div>
+<div class="fila" id="direccionFila" hidden><span>Dirección del aire</span><span class="valor" id="direccion"></span></div>
 <div id="estado">Conectando...</div>
 <script>
 function fmt(v, u) { return v === null ? "--" : v.toFixed(1) + " " + u; }
@@ -54,16 +58,22 @@ async function actualizar() {
   try {
     const r = await fetch("/datos");
     const d = await r.json();
-    document.getElementById("temp").textContent = d.error ? "ERROR sensor" : fmt(d.temp, "°C");
-    document.getElementById("tdht").textContent = fmt(d.tdht, "°C");
-    document.getElementById("hum").textContent = fmt(d.hum, "%");
-    document.getElementById("fan").textContent = d.ventilador ? "ENCENDIDO" : "APAGADO";
+    const vigente = d.edad >= 0 && d.edad <= 15;
+    document.getElementById("temp").textContent = vigente && d.error ? "ERROR sensor" : fmt(vigente ? d.temp : null, "°C");
+    document.getElementById("tdht").textContent = fmt(vigente ? d.tdht : null, "°C");
+    document.getElementById("hum").textContent = fmt(vigente ? d.hum : null, "%");
+    document.getElementById("fan").textContent = vigente ? (d.ventilador ? "ENCENDIDO" : "APAGADO") : "--";
+    const direccion = {ds18b20: "DS18B20", dht11: "DHT11", reposo: "Reposo"}[d.direccion];
+    document.getElementById("direccionFila").hidden = !vigente || !direccion;
+    document.getElementById("direccion").textContent = direccion ? direccion + " · " + d.angulo + "°" : "";
     document.getElementById("estado").textContent =
       d.edad < 0 ? "Sin datos del Arduino todavía"
-      : d.edad > 10 ? "Sin datos del Arduino hace " + d.edad + " s"
+      : d.edad > 15 ? "Sin datos del Arduino hace " + d.edad + " s"
       : "Actualizado hace " + d.edad + " s";
   } catch (e) {
     document.getElementById("estado").textContent = "Sin conexión con el ESP32";
+    for (const id of ["temp", "tdht", "hum", "fan"]) document.getElementById(id).textContent = "--";
+    document.getElementById("direccionFila").hidden = true;
   }
 }
 actualizar();
@@ -86,25 +96,40 @@ void enviarDatos() {
   j += "\"ventilador\":" + String(ventilador ? "true" : "false") + ",";
   j += "\"error\":" + String(errorSensor ? "true" : "false") + ",";
   j += "\"edad\":" + String(edad);
+  if (direccion != nullptr) {
+    j += ",\"angulo\":" + String(angulo);
+    j += ",\"direccion\":\"" + String(direccion) + "\"";
+  }
   j += "}";
   servidor.send(200, "application/json", j);
 }
 
-// Formato esperado: DATA,tempDS,tempDHT,humedad,ventilador,error
+// La extensión AIR distingue la orientación de otras tramas Nano con campos extra.
 void procesarLinea(const String& l) {
   if (!l.startsWith("DATA,")) return;
 
   float v[5];
-  int n = 0;
-  int ini = 5;
-  while (n < 5) {
-    int coma = l.indexOf(',', ini);
-    String campo = (coma < 0) ? l.substring(ini) : l.substring(ini, coma);
-    v[n++] = campo.toFloat();
-    if (coma < 0) break;
-    ini = coma + 1;
+  const char* campo = l.c_str() + 5;
+  for (int i = 0; i < 5; ++i) {
+    char* fin;
+    v[i] = strtof(campo, &fin);
+    if (fin == campo || !isfinite(v[i])) return;
+    if (*fin != ',' && (i < 4 || *fin != '\0')) return;
+    campo = i < 4 ? fin + 1 : fin;
   }
-  if (n < 5) return;
+  if ((v[3] != 0 && v[3] != 1) || (v[4] != 0 && v[4] != 1)) return;
+
+  angulo = -1;
+  direccion = nullptr;
+  if (strncmp(campo, ",AIR,", 5) == 0) {
+    char* fin;
+    const long grados = strtol(campo + 5, &fin, 10);
+    if (fin != campo + 5 && *fin == ',' && grados >= 0 && grados <= 180 &&
+        fin[1] >= '0' && fin[1] <= '2' && (fin[2] == '\0' || fin[2] == ',')) {
+      angulo = static_cast<int>(grados);
+      direccion = fin[1] == '0' ? "reposo" : fin[1] == '1' ? "ds18b20" : "dht11";
+    }
+  }
 
   tempDS = v[0];
   tempDHT = v[1];

@@ -1,7 +1,9 @@
 import logging
+import os
+from secrets import compare_digest
 from contextlib import asynccontextmanager
-from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, Query, Path as PathParam, HTTPException, status
+from typing import Optional, List, Dict, Any, Literal
+from fastapi import FastAPI, Query, Path as PathParam, HTTPException, Header, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -11,6 +13,14 @@ from app.ml_model import ml_predictor
 from app.mqtt_service import mqtt_service
 from app.statistics_service import statistics_service
 from app.esp32_client import esp32_client
+from app.evidencia import obtener_evidencia
+from app.control_nano import IntercambioNano, OrdenNano, control_nano
+
+NANO_BRIDGE_TOKEN = os.getenv("NANO_BRIDGE_TOKEN", "")
+ORIGENES_CONTROL_LOCAL = {
+    "http://localhost:3000", "http://127.0.0.1:3000",
+    "http://localhost:8000", "http://127.0.0.1:8000",
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -60,7 +70,7 @@ class ModoControlRequest(BaseModel):
 
 class EscenarioSimulacionRequest(BaseModel):
     escenario: str = Field(..., description="Escenario: 'normal', 'sobrecalentamiento', 'carga_extrema', 'demostracion', 'fallo_sensor'")
-    zona_fallo_sensor: Optional[str] = Field("zona2", description="Zona sin señal cuando el escenario es 'fallo_sensor'")
+    zona_fallo_sensor: Optional[str] = Field(None, description="Zona simulada sin señal para el escenario 'fallo_sensor'")
 
 class ReiniciarSimulacionRequest(BaseModel):
     escenario: Optional[str] = Field(None, description="Escenario opcional al cual reiniciar la simulación")
@@ -127,7 +137,7 @@ def obtener_telemetria_actual():
 
     # Si aún no han llegado mensajes MQTT desde el arranque, complementar SOLO zonas virtuales con último registro en BD
     if estado_mem["sistema"]["total_mensajes_recibidos"] == 0:
-        registros_bd = db_manager.obtener_telemetria_actual()
+        registros_bd = db_manager.obtener_telemetria_actual(origen="virtual")
         for reg in registros_bd:
             z_id = reg["zona"]
             if z_id in zonas_mem and zonas_mem[z_id].get("origen") == "virtual":
@@ -148,8 +158,9 @@ def obtener_detalle_zona(
 
     estado_actual = mqtt_service.obtener_estado_actual()
     info_zona = next((z for z in estado_actual["zonas"] if z["zona"] == zona_id), None)
-    historial = db_manager.obtener_historial_zona(zona=zona_id, limit=limit)
-    eventos = db_manager.obtener_eventos_control(limit=15, zona=zona_id)
+    origen = info_zona.get("origen") if info_zona else None
+    historial = db_manager.obtener_historial_zona(zona=zona_id, limit=limit, origen=origen)
+    eventos = db_manager.obtener_eventos_control(limit=15, zona=zona_id) if origen == "virtual" else []
     alertas = [a for a in mqtt_service.obtener_alertas_activas() if a["zona"] == zona_id]
 
     return {
@@ -165,10 +176,11 @@ def obtener_detalle_zona(
 @app.get("/api/telemetria/historial")
 def obtener_historial_telemetria(
     zona: Optional[str] = Query("todas", description="zona1 a zona5 o 'todas'"),
-    limit: int = Query(60, ge=5, le=300, description="Número de puntos históricos")
+    limit: int = Query(60, ge=5, le=300, description="Número de puntos históricos"),
+    origen: Optional[Literal["real", "virtual"]] = Query(None),
 ):
     """Retorna series temporales para graficar temperatura observada vs predicción a +10m"""
-    historial = db_manager.obtener_historial_zona(zona=zona, limit=limit)
+    historial = db_manager.obtener_historial_zona(zona=zona, limit=limit, origen=origen)
     return {
         "zona_filtrada": zona,
         "modo_operacion": settings.OPERATION_MODE,
@@ -188,7 +200,8 @@ def obtener_alertas():
 
 @app.get("/api/metricas")
 def calcular_metricas_predictivas(
-    zona: Optional[str] = Query("todas", description="Filtrar por zona específica o 'todas'")
+    zona: Optional[str] = Query("todas", description="Filtrar por zona específica o 'todas'"),
+    origen: Literal["real", "virtual"] = Query("virtual"),
 ):
     """
     DIMENSIÓN 2: PRECISIÓN PREDICTIVA (MODELO ML)
@@ -197,31 +210,33 @@ def calcular_metricas_predictivas(
     pares = db_manager.obtener_pares_para_metricas(
         zona=zona,
         ventana_segundos=settings.VENTANA_PREDICCION_SEGUNDOS,
-        tolerancia=45
+        tolerancia=45,
+        origen=origen,
     )
 
     metricas = ml_predictor.calcular_metricas(pares)
     return {
         "zona": zona,
+        "origen": origen,
         "modo_operacion": settings.OPERATION_MODE,
         "horizonte_minutos": 10,
         "mae": metricas["mae"],
         "rmse": metricas["rmse"],
         "r2": metricas["r2"],
         "suficiente": metricas["suficiente"],
-        "estado": metricas["estado"],
+        "estado": "calculado" if metricas["suficiente"] else "muestras_insuficientes",
         "muestras_evaluadas": metricas["muestras"],
         "interpretacion": {
             "mae_info": (
-                f"En simulación, la predicción a +10m presenta un error medio de ±{metricas['mae']} °C."
+                f"Error absoluto medio de {metricas['mae']} °C para predicciones a +10 min."
                 if metricas["mae"] is not None else "Esperando pares con desfase de 10 minutos."
             ),
             "rmse_info": (
-                f"Raíz del error cuadrático medio en simulación: {metricas['rmse']} °C."
+                f"Raíz del error cuadrático medio: {metricas['rmse']} °C."
                 if metricas["rmse"] is not None else "Muestras insuficientes para calcular RMSE."
             ),
             "r2_info": (
-                f"Coeficiente de determinación R² = {metricas['r2']} sobre {metricas['muestras']} pares simulados."
+                f"Coeficiente de determinación R² = {metricas['r2']} sobre {metricas['muestras']} pares."
                 if metricas["r2"] is not None else "Se requieren al menos 2 pares con varianza térmica."
             )
         }
@@ -254,6 +269,13 @@ def obtener_indicadores_detallados():
 def obtener_pruebas_estadisticas():
     """Ejecuta las 4 pruebas estadísticas inferenciales etiquetadas como simulación demostrativa"""
     return statistics_service.ejecutar_pruebas_estadisticas()
+
+@app.get("/api/estadisticas/evidencia")
+def obtener_evidencia_historica():
+    try:
+        return obtener_evidencia()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail="Los CSV históricos no están disponibles.") from e
 
 @app.get("/api/control/estado")
 def obtener_estado_control():
@@ -290,12 +312,15 @@ def ejecutar_control_manual(comando: ComandoManualRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Zona inválida '{comando.zona}'. Use zona1 a zona5."
         )
-    return mqtt_service.ejecutar_control_manual(
-        zona=comando.zona,
-        fan_state=comando.fan_state,
-        servo_angle=comando.servo_angle,
-        activar_modo_manual=True
-    )
+    try:
+        return mqtt_service.ejecutar_control_manual(
+            zona=comando.zona,
+            fan_state=comando.fan_state,
+            servo_angle=comando.servo_angle,
+            activar_modo_manual=True
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
 
 @app.get("/api/simulacion/estado")
 def obtener_estado_simulacion():
@@ -316,7 +341,7 @@ def cambiar_escenario_simulacion(solicitud: EscenarioSimulacionRequest):
     try:
         return mqtt_service.cambiar_escenario_simulacion(
             escenario=solicitud.escenario,
-            zona_fallo_sensor=solicitud.zona_fallo_sensor or "zona2"
+            zona_fallo_sensor=solicitud.zona_fallo_sensor
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -346,6 +371,28 @@ def cambiar_modo_operacion_sistema(solicitud: ModoOperacionSistemaRequest):
 def obtener_estado_hardware():
     """Retorna el diagnóstico detallado del enlace HTTP con el ESP32, latencia, edad de trama y mapeo de sensores"""
     return esp32_client.obtener_estado()
+
+
+@app.post("/api/hardware/puente", include_in_schema=False)
+def intercambiar_con_nano(mensaje: IntercambioNano, x_nano_token: str = Header("")):
+    if not NANO_BRIDGE_TOKEN or not compare_digest(NANO_BRIDGE_TOKEN, x_nano_token):
+        raise HTTPException(status_code=403, detail="Puente USB sin autorización.")
+    return control_nano.intercambiar(mensaje)
+
+
+@app.post("/api/hardware/actuacion")
+def ejecutar_actuacion_fisica(orden: OrdenNano, request: Request):
+    origen = request.headers.get("origin")
+    if origen is not None and origen not in ORIGENES_CONTROL_LOCAL:
+        raise HTTPException(status_code=403, detail="El control físico se opera desde el dashboard local.")
+    try:
+        return control_nano.ejecutar(orden)
+    except ConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except TimeoutError as e:
+        raise HTTPException(status_code=504, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 @app.get("/api/hardware/datos")
 def obtener_datos_hardware():
