@@ -219,6 +219,8 @@ export interface PruebaEstadistica {
   media_post_enfriamiento_c?: number | null;
   reduccion_media_c?: number | null;
   latencia_media_ms?: number | null;
+  desviacion_std_ms?: number | null;
+  d_cohen?: number | null;
   medias_por_zona_c?: Record<string, number>;
   rechaza_h0?: boolean | null;
   supuesto_normalidad_cumplido?: boolean | null;

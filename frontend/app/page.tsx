@@ -45,11 +45,23 @@ import { ControlDiagnosticsView } from "../components/Views/ControlDiagnosticsVi
 
 type TabView = "monitoreo" | "indicadores" | "estadisticas" | "control";
 
-const SECTION_TITLES: Record<TabView, string> = {
-  monitoreo: "Monitoreo",
-  indicadores: "Indicadores",
-  estadisticas: "Estadísticas",
-  control: "Control",
+const SECTION_TITLES: Record<TabView, { title: string; subtitle: string }> = {
+  monitoreo: {
+    title: "Monitoreo en Tiempo Real",
+    subtitle: "Supervisión térmica continua de estaciones de cómputo",
+  },
+  indicadores: {
+    title: "Indicadores de Investigación",
+    subtitle: "Métricas operacionales y validación de modelo predictivo",
+  },
+  estadisticas: {
+    title: "Pruebas Estadísticas de Hipótesis & Validación",
+    subtitle: "Universidad Nacional de Trujillo · Laboratorio de Cómputo",
+  },
+  control: {
+    title: "Diagnóstico y Control de Actuación",
+    subtitle: "Orientación servo y control de flujo de disipación",
+  },
 };
 
 export default function SmartCoolingDashboard() {
@@ -412,9 +424,14 @@ export default function SmartCoolingDashboard() {
                 <Menu className="w-4 h-4" />
               )}
             </button>
-            <h1 className="text-lg font-semibold tracking-tight">
-              {SECTION_TITLES[activeTab]}
-            </h1>
+            <div>
+              <h1 className={`text-base sm:text-lg font-bold tracking-tight ${darkMode ? "text-white" : "text-slate-900"}`}>
+                {SECTION_TITLES[activeTab].title}
+              </h1>
+              <p className={`text-[11px] sm:text-xs ${darkMode ? "text-slate-400" : "text-slate-600 font-medium"}`}>
+                {SECTION_TITLES[activeTab].subtitle}
+              </p>
+            </div>
           </div>
 
           {/* Controles de estado en fila superior */}

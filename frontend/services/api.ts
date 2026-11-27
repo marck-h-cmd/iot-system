@@ -402,6 +402,8 @@ function normalizeEstadisticas(rawStat: any): PruebasEstadisticasResponse {
         media_post_enfriamiento_c: d.media_despues_c ?? null,
         reduccion_media_c: d.reduccion_media_c ?? null,
         latencia_media_ms: d.media_latencia_ms ?? null,
+        desviacion_std_ms: d.desviacion_std_ms ?? null,
+        d_cohen: d.d_cohen ?? null,
         rechaza_h0: Boolean(d.es_significativo),
         supuesto_normalidad_cumplido: Boolean(d.es_normal),
         modo_operacion: "simulacion",
