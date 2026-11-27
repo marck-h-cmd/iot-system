@@ -8,7 +8,7 @@ import {
   StyleSheet,
   ScrollView,
 } from 'react-native';
-import { X, Server, KeyRound, User, Wifi, Shield } from 'lucide-react-native';
+import { X, Server, KeyRound, User, Wifi, Shield, Lock } from 'lucide-react-native';
 import { colors } from '../styles/theme';
 import { BrokerConfig, ConnectionStatus } from '../types/iot';
 
@@ -37,16 +37,56 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
   const [username, setUsername] = useState(config.username);
   const [password, setPassword] = useState(config.password);
   const [clientId, setClientId] = useState(config.clientId);
+  const [useSsl, setUseSsl] = useState(Boolean(config.useSsl || config.port === 443));
+
+  const handleHostChange = (text: string) => {
+    let clean = text.trim();
+    if (clean.startsWith('https://')) {
+      clean = clean.replace('https://', '');
+      setUseSsl(true);
+      if (port === '8083') setPort('443');
+    } else if (clean.startsWith('http://')) {
+      clean = clean.replace('http://', '');
+    } else if (clean.startsWith('wss://')) {
+      clean = clean.replace('wss://', '');
+      setUseSsl(true);
+      if (port === '8083') setPort('443');
+    } else if (clean.startsWith('ws://')) {
+      clean = clean.replace('ws://', '');
+    }
+
+    if (clean.includes('/')) {
+      const parts = clean.split('/');
+      clean = parts[0];
+      if (parts[1]) setPath('/' + parts.slice(1).join('/'));
+    }
+
+    if (clean.includes('ngrok') || clean.includes('trycloudflare') || clean.includes('.app')) {
+      setUseSsl(true);
+      if (port === '8083') setPort('443');
+    }
+
+    setHost(clean);
+  };
 
   const handleApply = () => {
+    let cleanHost = host.trim()
+      .replace(/^https?:\/\//i, '')
+      .replace(/^wss?:\/\//i, '')
+      .replace(/\/.*$/, '');
+
+    const isDomain = cleanHost.includes('ngrok') || cleanHost.includes('cloudflare') || cleanHost.includes('.app');
+    const isSsl = useSsl || isDomain || port.trim() === '443';
+    const finalPort = Number(port.trim()) || (isSsl ? 443 : 8083);
+
     onSaveAndConnect({
-      host: host.trim(),
-      port: Number(port.trim()) || 8083,
-      path: path.trim(),
+      host: cleanHost,
+      port: finalPort,
+      path: path.trim() || '/mqtt',
       username: username.trim(),
       password: password.trim(),
       clientId: clientId.trim() || `Mobile_${Math.random().toString(16).substring(2, 8)}`,
-      useSsl: false,
+      useSsl: isSsl,
     });
     onClose();
   };
@@ -96,12 +136,12 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Host / Dirección IP</Text>
+              <Text style={styles.inputLabel}>Host / Dominio / IP</Text>
               <TextInput
                 style={styles.textInput}
                 value={host}
-                onChangeText={setHost}
-                placeholder="192.168.1.5"
+                onChangeText={handleHostChange}
+                placeholder="192.168.1.5 o xxxx.ngrok-free.app"
                 placeholderTextColor={colors.textMuted}
                 autoCapitalize="none"
               />
@@ -113,9 +153,12 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
                 <TextInput
                   style={styles.textInput}
                   value={port}
-                  onChangeText={setPort}
+                  onChangeText={(val) => {
+                    setPort(val);
+                    if (val === '443') setUseSsl(true);
+                  }}
                   keyboardType="numeric"
-                  placeholder="8083"
+                  placeholder="8083 o 443"
                   placeholderTextColor={colors.textMuted}
                 />
               </View>
@@ -132,6 +175,20 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
                 />
               </View>
             </View>
+
+            <TouchableOpacity
+              style={styles.sslToggleRow}
+              onPress={() => setUseSsl(!useSsl)}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.checkbox, useSsl && styles.checkboxActive]}>
+                {useSsl && <Text style={styles.checkmark}>✓</Text>}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sslToggleLabel}>Cifrado SSL / WSS ({useSsl ? 'wss://' : 'ws://'})</Text>
+                <Text style={styles.sslToggleHelp}>Actívalo para Ngrok, Cloudflare o puertos 443</Text>
+              </View>
+            </TouchableOpacity>
 
             <View style={styles.sectionTitleRow}>
               <Shield size={14} color={colors.textSecondary} />
@@ -279,6 +336,45 @@ const styles = StyleSheet.create({
   rowInputs: {
     flexDirection: 'row',
     gap: 10,
+  },
+  sslToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: colors.textMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxActive: {
+    backgroundColor: colors.cyan,
+    borderColor: colors.cyan,
+  },
+  checkmark: {
+    color: '#000000',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  sslToggleLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  sslToggleHelp: {
+    fontSize: 11,
+    color: colors.textMuted,
   },
   inputLabel: {
     fontSize: 12,
