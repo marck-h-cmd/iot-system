@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -8,8 +8,8 @@ import {
   StyleSheet,
   ScrollView,
 } from 'react-native';
-import { X, Server, KeyRound, User, Wifi, Shield, Lock } from 'lucide-react-native';
-import { colors } from '../styles/theme';
+import { X, Server, Wifi, Shield } from 'lucide-react-native';
+import { colors, ThemePalette } from '../styles/theme';
 import { BrokerConfig, ConnectionStatus } from '../types/iot';
 
 interface ConnectionModalProps {
@@ -20,6 +20,7 @@ interface ConnectionModalProps {
   statusError?: string;
   onSaveAndConnect: (newConfig: BrokerConfig) => void;
   onDisconnect: () => void;
+  theme?: ThemePalette;
 }
 
 export const ConnectionModal: React.FC<ConnectionModalProps> = ({
@@ -30,6 +31,7 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
   statusError,
   onSaveAndConnect,
   onDisconnect,
+  theme,
 }) => {
   const [host, setHost] = useState(config.host);
   const [port, setPort] = useState(String(config.port));
@@ -38,6 +40,18 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
   const [password, setPassword] = useState(config.password);
   const [clientId, setClientId] = useState(config.clientId);
   const [useSsl, setUseSsl] = useState(Boolean(config.useSsl || config.port === 443));
+
+  useEffect(() => {
+    if (visible) {
+      setHost(config.host);
+      setPort(String(config.port));
+      setPath(config.path);
+      setUsername(config.username);
+      setPassword(config.password);
+      setClientId(config.clientId);
+      setUseSsl(Boolean(config.useSsl || config.port === 443));
+    }
+  }, [visible, config]);
 
   const handleHostChange = (text: string) => {
     let clean = text.trim();
@@ -106,17 +120,26 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
 
   const badge = getStatusBadge();
 
+  const isDark = !theme || theme.dark;
+  const cardBg = isDark ? colors.surface : (theme?.bgElevated || '#FFFFFF');
+  const borderColor = isDark ? colors.surfaceBorder : (theme?.borderCard || '#E2E8F0');
+  const textColor = isDark ? colors.textPrimary : (theme?.textPrimary || '#0F172A');
+  const textSub = isDark ? colors.textSecondary : (theme?.textSecondary || '#475569');
+  const textMuted = isDark ? colors.textMuted : (theme?.textMuted || '#64748B');
+  const inputBg = isDark ? '#090D16' : (theme?.bgSubCard || '#F1F5F9');
+  const inputBorder = isDark ? 'rgba(255, 255, 255, 0.1)' : (theme?.borderCard || '#CBD5E1');
+
   return (
     <Modal visible={visible} animationType="slide" transparent={true} onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
+        <View style={[styles.modalContent, { backgroundColor: cardBg, borderColor }]}>
+          <View style={[styles.modalHeader, { borderBottomColor: borderColor }]}>
             <View style={styles.headerTitleRow}>
-              <Server size={18} color={colors.cyan} />
-              <Text style={styles.modalTitle}>Configuración del Bróker MQTT</Text>
+              <Server size={18} color={theme?.accentPrimary || colors.cyan} />
+              <Text style={[styles.modalTitle, { color: textColor }]}>Configuración del Bróker MQTT</Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-              <X size={20} color={colors.textSecondary} />
+              <X size={20} color={textSub} />
             </TouchableOpacity>
           </View>
 
@@ -131,27 +154,55 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
             )}
 
             <View style={styles.sectionTitleRow}>
-              <Wifi size={14} color={colors.textSecondary} />
-              <Text style={styles.sectionTitle}>Dirección y Transporte WebSocket</Text>
+              <Wifi size={14} color={textSub} />
+              <Text style={[styles.sectionTitle, { color: textSub }]}>Dirección y Transporte WebSocket</Text>
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Host / Dominio / IP</Text>
+              <Text style={[styles.inputLabel, { color: textMuted }]}>Host / Dominio / IP</Text>
               <TextInput
-                style={styles.textInput}
+                style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
                 value={host}
                 onChangeText={handleHostChange}
                 placeholder="192.168.1.5 o xxxx.ngrok-free.app"
-                placeholderTextColor={colors.textMuted}
+                placeholderTextColor={textMuted}
                 autoCapitalize="none"
               />
+              {/* Presets rápidos */}
+              <View style={styles.quickPresetsRow}>
+                <TouchableOpacity
+                  style={[styles.quickPresetChip, { borderColor, backgroundColor: inputBg }]}
+                  onPress={() => {
+                    setHost('192.168.1.5');
+                    setPort('8083');
+                    setUseSsl(false);
+                  }}
+                >
+                  <Text style={[styles.quickPresetText, { color: theme?.accentPrimary || colors.cyan }]}>
+                    IP Local (192.168.1.5:8083)
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.quickPresetChip, { borderColor, backgroundColor: inputBg }]}
+                  onPress={() => {
+                    setHost('localhost');
+                    setPort('8083');
+                    setUseSsl(false);
+                  }}
+                >
+                  <Text style={[styles.quickPresetText, { color: textSub }]}>
+                    localhost:8083
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             <View style={styles.rowInputs}>
               <View style={[styles.inputGroup, { flex: 1 }]}>
-                <Text style={styles.inputLabel}>Puerto WS</Text>
+                <Text style={[styles.inputLabel, { color: textMuted }]}>Puerto WS</Text>
                 <TextInput
-                  style={styles.textInput}
+                  style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
                   value={port}
                   onChangeText={(val) => {
                     setPort(val);
@@ -159,86 +210,92 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
                   }}
                   keyboardType="numeric"
                   placeholder="8083 o 443"
-                  placeholderTextColor={colors.textMuted}
+                  placeholderTextColor={textMuted}
                 />
               </View>
 
               <View style={[styles.inputGroup, { flex: 1 }]}>
-                <Text style={styles.inputLabel}>Ruta WS</Text>
+                <Text style={[styles.inputLabel, { color: textMuted }]}>Ruta WS</Text>
                 <TextInput
-                  style={styles.textInput}
+                  style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
                   value={path}
                   onChangeText={setPath}
                   placeholder="/mqtt"
-                  placeholderTextColor={colors.textMuted}
+                  placeholderTextColor={textMuted}
                   autoCapitalize="none"
                 />
               </View>
             </View>
 
             <TouchableOpacity
-              style={styles.sslToggleRow}
+              style={[
+                styles.sslToggleRow,
+                { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.03)', borderColor },
+              ]}
               onPress={() => setUseSsl(!useSsl)}
               activeOpacity={0.7}
             >
-              <View style={[styles.checkbox, useSsl && styles.checkboxActive]}>
+              <View style={[styles.checkbox, useSsl && { backgroundColor: theme?.accentPrimary || colors.cyan, borderColor: theme?.accentPrimary || colors.cyan }]}>
                 {useSsl && <Text style={styles.checkmark}>✓</Text>}
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.sslToggleLabel}>Cifrado SSL / WSS ({useSsl ? 'wss://' : 'ws://'})</Text>
-                <Text style={styles.sslToggleHelp}>Actívalo para Ngrok, Cloudflare o puertos 443</Text>
+                <Text style={[styles.sslToggleLabel, { color: textColor }]}>Cifrado SSL / WSS ({useSsl ? 'wss://' : 'ws://'})</Text>
+                <Text style={[styles.sslToggleHelp, { color: textMuted }]}>Actívalo para Ngrok, Cloudflare o puertos 443</Text>
               </View>
             </TouchableOpacity>
 
             <View style={styles.sectionTitleRow}>
-              <Shield size={14} color={colors.textSecondary} />
-              <Text style={styles.sectionTitle}>Mecanismo de Seguridad y Autenticación</Text>
+              <Shield size={14} color={textSub} />
+              <Text style={[styles.sectionTitle, { color: textSub }]}>Mecanismo de Seguridad y Autenticación</Text>
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Usuario MQTT</Text>
+              <Text style={[styles.inputLabel, { color: textMuted }]}>Usuario MQTT</Text>
               <TextInput
-                style={styles.textInput}
+                style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
                 value={username}
                 onChangeText={setUsername}
                 placeholder="sensor_iot"
-                placeholderTextColor={colors.textMuted}
+                placeholderTextColor={textMuted}
                 autoCapitalize="none"
               />
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Contraseña</Text>
+              <Text style={[styles.inputLabel, { color: textMuted }]}>Contraseña</Text>
               <TextInput
-                style={styles.textInput}
+                style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry={true}
                 placeholder="••••••••"
-                placeholderTextColor={colors.textMuted}
+                placeholderTextColor={textMuted}
                 autoCapitalize="none"
               />
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Client ID</Text>
+              <Text style={[styles.inputLabel, { color: textMuted }]}>Client ID</Text>
               <TextInput
-                style={styles.textInput}
+                style={[styles.textInput, { backgroundColor: inputBg, borderColor: inputBorder, color: textColor }]}
                 value={clientId}
                 onChangeText={setClientId}
                 placeholder="Mobile_Client"
-                placeholderTextColor={colors.textMuted}
+                placeholderTextColor={textMuted}
                 autoCapitalize="none"
               />
             </View>
 
             <View style={styles.actionsContainer}>
-              <TouchableOpacity style={styles.connectButton} onPress={handleApply}>
-                <Text style={styles.connectButtonText}>Guardar y Conectar</Text>
+              <TouchableOpacity
+                style={[styles.connectButton, { backgroundColor: theme?.accentPrimary || colors.cyan }]}
+                onPress={handleApply}
+              >
+                <Text style={[styles.connectButtonText, { color: isDark ? '#000000' : '#FFFFFF' }]}>Guardar y Conectar</Text>
               </TouchableOpacity>
 
               {status === 'connected' && (
-                <TouchableOpacity style={styles.disconnectButton} onPress={onDisconnect}>
+                <TouchableOpacity style={[styles.disconnectButton, { borderColor }]} onPress={onDisconnect}>
                   <Text style={styles.disconnectButtonText}>Desconectar</Text>
                 </TouchableOpacity>
               )}
@@ -257,11 +314,9 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: colors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     borderWidth: 1,
-    borderColor: colors.surfaceBorder,
     padding: 20,
     maxHeight: '90%',
   },
@@ -272,7 +327,6 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
   },
   headerTitleRow: {
     flexDirection: 'row',
@@ -282,7 +336,6 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: colors.textPrimary,
   },
   closeButton: {
     padding: 4,
@@ -327,11 +380,25 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 12,
     fontWeight: '700',
-    color: colors.textSecondary,
     textTransform: 'uppercase',
   },
   inputGroup: {
     marginBottom: 12,
+  },
+  quickPresetsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
+  },
+  quickPresetChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  quickPresetText: {
+    fontSize: 10.5,
+    fontWeight: '600',
   },
   rowInputs: {
     flexDirection: 'row',
@@ -341,9 +408,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 10,
     padding: 10,
     marginTop: 4,
@@ -358,10 +423,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  checkboxActive: {
-    backgroundColor: colors.cyan,
-    borderColor: colors.cyan,
-  },
   checkmark: {
     color: '#000000',
     fontSize: 14,
@@ -370,26 +431,20 @@ const styles = StyleSheet.create({
   sslToggleLabel: {
     fontSize: 13,
     fontWeight: '700',
-    color: colors.textPrimary,
   },
   sslToggleHelp: {
     fontSize: 11,
-    color: colors.textMuted,
   },
   inputLabel: {
     fontSize: 12,
-    color: colors.textMuted,
     marginBottom: 4,
     fontWeight: '600',
   },
   textInput: {
-    backgroundColor: '#090D16',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    color: colors.textPrimary,
     fontSize: 14,
     fontFamily: 'monospace',
   },
@@ -399,20 +454,17 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   connectButton: {
-    backgroundColor: colors.cyan,
     paddingVertical: 12,
     borderRadius: 12,
     alignItems: 'center',
   },
   connectButtonText: {
-    color: '#000000',
     fontSize: 14,
     fontWeight: '800',
   },
   disconnectButton: {
     backgroundColor: '#1E293B',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
     paddingVertical: 10,
     borderRadius: 12,
     alignItems: 'center',

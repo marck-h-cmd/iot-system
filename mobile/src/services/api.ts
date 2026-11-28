@@ -29,7 +29,7 @@ export function detectDefaultApiUrl(): string {
     }
   }
 
-  return "http://192.168.0.23:8000";
+  return "http://192.168.1.5:8000";
 }
 
 /**

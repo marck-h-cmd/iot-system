@@ -21,6 +21,8 @@ import {
 import {
   AlertaActiva,
   AppSettings,
+  BrokerConfig,
+  ConnectionStatus,
   EscenarioSimulacion,
   EstadoActualResponse,
   EventoControl,
@@ -38,7 +40,9 @@ import {
   fetchMobileDashboardBundle,
   reiniciarSimulacionMobile,
 } from "./src/services/api";
+import { mqttService } from "./src/services/mqttClient";
 import { BrandLogoNative } from "./src/components/BrandLogoNative";
+import { ConnectionModal } from "./src/components/ConnectionModal";
 import {
   BottomTabBar,
   PrimaryMobileTab,
@@ -93,7 +97,65 @@ export default function App() {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string>("--:--:--");
 
+  const [brokerModalVisible, setBrokerModalVisible] = useState<boolean>(false);
+  const [brokerConfig, setBrokerConfig] = useState<BrokerConfig>(() =>
+    mqttService.getConfig()
+  );
+  const [mqttStatus, setMqttStatus] = useState<ConnectionStatus>("disconnected");
+  const [mqttStatusError, setMqttStatusError] = useState<string | undefined>(
+    undefined
+  );
+
   const theme = settings.darkMode ? DARK_THEME : LIGHT_THEME;
+
+  useEffect(() => {
+    const unsubStatus = mqttService.onStatusChange((newStatus, error) => {
+      setMqttStatus(newStatus);
+      setMqttStatusError(error);
+      if (newStatus === "connected") {
+        setConnected(true);
+      }
+    });
+
+    const unsubTelemetry = mqttService.onTelemetry(() => {
+      setConnected(true);
+    });
+
+    mqttService.connect();
+
+    return () => {
+      unsubStatus();
+      unsubTelemetry();
+      mqttService.disconnect();
+    };
+  }, []);
+
+  const handleSaveBrokerConfig = (newConfig: BrokerConfig) => {
+    setBrokerConfig(newConfig);
+    mqttService.connect(newConfig);
+
+    const isSsl =
+      newConfig.useSsl ||
+      newConfig.port === 443 ||
+      newConfig.host.includes("ngrok") ||
+      newConfig.host.includes("cloudflare") ||
+      newConfig.host.includes(".app");
+    const protocol = isSsl ? "https" : "http";
+    const isTunnel =
+      isSsl ||
+      newConfig.host.includes("ngrok") ||
+      newConfig.host.includes("cloudflare") ||
+      newConfig.host.includes(".app");
+    const apiPort = isTunnel ? "" : ":8000";
+    const newApiUrl = `${protocol}://${newConfig.host}${apiPort}`;
+
+    handleUpdateSettings({ apiUrl: newApiUrl });
+    sincronizarDatos();
+  };
+
+  const handleDisconnectBroker = () => {
+    mqttService.disconnect();
+  };
 
   const sincronizarDatos = useCallback(async () => {
     try {
@@ -198,10 +260,11 @@ export default function App() {
         <SettingsScreen
           settings={settings}
           estadoActual={estadoActual}
-          connected={connected}
+          connected={connected || mqttStatus === "connected"}
           theme={theme}
           onUpdateSettings={handleUpdateSettings}
           onBack={() => setOverlayRoute({ type: "none" })}
+          onOpenBrokerModal={() => setBrokerModalVisible(true)}
         />
       );
     }
@@ -300,19 +363,23 @@ export default function App() {
         </View>
 
         <View style={styles.topActions}>
-          {/* Estado de conexión */}
+          {/* Estado de conexión y selector de red/IP */}
           <TouchableOpacity
             style={[
               styles.connPill,
               {
-                backgroundColor: connected
-                  ? theme.emeraldSoft
-                  : theme.roseSoft,
+                backgroundColor:
+                  connected || mqttStatus === "connected"
+                    ? theme.emeraldSoft
+                    : mqttStatus === "connecting"
+                    ? theme.amberSoft
+                    : theme.roseSoft,
               },
             ]}
-            onPress={() => setOverlayRoute({ type: "settings" })}
+            onPress={() => setBrokerModalVisible(true)}
+            activeOpacity={0.7}
           >
-            {connected ? (
+            {connected || mqttStatus === "connected" ? (
               <Wifi size={12} color={theme.emerald} />
             ) : (
               <WifiOff size={12} color={theme.rose} />
@@ -320,10 +387,21 @@ export default function App() {
             <Text
               style={[
                 styles.connText,
-                { color: connected ? theme.emerald : theme.rose },
+                {
+                  color:
+                    connected || mqttStatus === "connected"
+                      ? theme.emerald
+                      : mqttStatus === "connecting"
+                      ? theme.amber
+                      : theme.rose,
+                },
               ]}
             >
-              {connected ? "Online" : "Offline"}
+              {connected || mqttStatus === "connected"
+                ? "Online"
+                : mqttStatus === "connecting"
+                ? "Conectando..."
+                : "Offline"}
             </Text>
           </TouchableOpacity>
 
@@ -406,6 +484,18 @@ export default function App() {
         }}
         theme={theme}
         alertCount={alertas.length}
+      />
+
+      {/* Modal interactivo de configuración de Red, IP y Bróker MQTT */}
+      <ConnectionModal
+        visible={brokerModalVisible}
+        onClose={() => setBrokerModalVisible(false)}
+        config={brokerConfig}
+        status={mqttStatus}
+        statusError={mqttStatusError}
+        onSaveAndConnect={handleSaveBrokerConfig}
+        onDisconnect={handleDisconnectBroker}
+        theme={theme}
       />
     </SafeAreaView>
   );

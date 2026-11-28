@@ -29,11 +29,11 @@ interface SettingsScreenProps {
   theme: ThemePalette;
   onUpdateSettings: (partial: Partial<AppSettings>) => void;
   onBack: () => void;
+  onOpenBrokerModal?: () => void;
 }
 
 const URL_PRESETS = [
-  { label: "Red Wi-Fi LAN (PC Host Actual)", url: "http://192.168.0.23:8000" },
-  { label: "Túnel Público (4G / Cualquier Red)", url: "https://quiet-pots-call.loca.lt" },
+  { label: "Red Wi-Fi LAN (PC Host 192.168.1.5)", url: "http://192.168.1.5:8000" },
   { label: "Navegador web local", url: "http://localhost:8000" },
 ];
 
@@ -46,6 +46,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   theme,
   onUpdateSettings,
   onBack,
+  onOpenBrokerModal,
 }) => {
   const [urlInput, setUrlInput] = useState<string>(settings.apiUrl);
   const [testing, setTesting] = useState<boolean>(false);
@@ -272,6 +273,39 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
           })}
         </View>
       </View>
+
+      {/* Configuración de Red y Bróker MQTT */}
+      {onOpenBrokerModal && (
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: theme.bgCard, borderColor: theme.borderCard },
+          ]}
+        >
+          <View style={styles.headerRow}>
+            <Wifi size={16} color={theme.accentPrimary} />
+            <Text style={[styles.sectionTitle, { color: theme.textPrimary }]}>
+              Bróker MQTT y Red (Modal IP)
+            </Text>
+          </View>
+          <Text style={[styles.sectionSub, { color: theme.textSecondary }]}>
+            Configura la IP del Host, puerto WebSocket (8083 / 443), credenciales de sensor_iot y cifrado SSL en el modal interactivo.
+          </Text>
+
+          <TouchableOpacity
+            style={[
+              styles.saveBtn,
+              { backgroundColor: theme.accentPrimary, marginTop: 10 },
+            ]}
+            onPress={onOpenBrokerModal}
+          >
+            <Wifi size={16} color="#FFFFFF" />
+            <Text style={styles.saveBtnText}>
+              Abrir Modal de Conexión y Red IP
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* URL del Backend FastAPI */}
       <View
